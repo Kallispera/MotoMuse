@@ -23,3 +23,7 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    - assets/textures/texture_dark.jpg
+    - assets/textures/texture_light.jpg

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:motomuse/core/routing/app_router.dart';
+import 'package:motomuse/shared/widgets/textured_background.dart';
 
 /// Persistent shell widget that wraps all tab screens.
 ///
@@ -46,7 +47,7 @@ class AppShell extends StatelessWidget {
     final currentIndex = _currentIndex(context);
 
     return Scaffold(
-      body: child,
+      body: TexturedBackground(child: child),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: currentIndex,
         onTap: (index) => context.go(_tabs[index].route),
