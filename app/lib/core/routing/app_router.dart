@@ -1,4 +1,7 @@
+import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:motomuse/features/auth/application/auth_providers.dart';
 import 'package:motomuse/features/auth/presentation/sign_in_screen.dart';
 import 'package:motomuse/features/garage/presentation/garage_screen.dart';
 import 'package:motomuse/features/profile/presentation/profile_screen.dart';
@@ -20,36 +23,81 @@ abstract final class AppRoutes {
   static const String profile = '/profile';
 }
 
-/// The root [GoRouter] configuration for the app.
-final appRouter = GoRouter(
-  initialLocation: AppRoutes.signIn,
-  routes: [
-    GoRoute(
-      path: AppRoutes.signIn,
-      builder: (context, state) => const SignInScreen(),
-    ),
-    ShellRoute(
-      builder: (context, state, child) => AppShell(child: child),
-      routes: [
-        GoRoute(
-          path: AppRoutes.garage,
-          pageBuilder: (context, state) => const NoTransitionPage(
-            child: GarageScreen(),
+// ---------------------------------------------------------------------------
+// Router notifier — bridges Riverpod auth state to GoRouter's refresh
+// ---------------------------------------------------------------------------
+
+/// A [ChangeNotifier] that fires whenever the auth state changes.
+///
+/// Used as `refreshListenable` so the router re-evaluates its
+/// `redirect` callback without the [GoRouter] instance being recreated.
+class _RouterNotifier extends ChangeNotifier {
+  _RouterNotifier(Ref ref) {
+    ref.listen(authStateChangesProvider, (_, __) => notifyListeners());
+  }
+}
+
+final _routerNotifierProvider = ChangeNotifierProvider(_RouterNotifier.new);
+
+// ---------------------------------------------------------------------------
+// Router provider
+// ---------------------------------------------------------------------------
+
+/// Provides the app's [GoRouter].
+///
+/// The router instance is created once and lives for the app's lifetime.
+/// Auth-state changes are handled via [_RouterNotifier] and the `redirect`
+/// callback — the instance itself is never recreated.
+final routerProvider = Provider<GoRouter>((ref) {
+  final notifier = ref.read(_routerNotifierProvider);
+
+  final router = GoRouter(
+    initialLocation: AppRoutes.signIn,
+    refreshListenable: notifier,
+    redirect: (context, state) {
+      final authValue = ref.read(authStateChangesProvider);
+
+      // Don't redirect while the initial auth check is still in flight.
+      if (authValue.isLoading) return null;
+
+      final isLoggedIn = authValue.valueOrNull != null;
+      final isOnSignIn = state.matchedLocation == AppRoutes.signIn;
+
+      if (!isLoggedIn && !isOnSignIn) return AppRoutes.signIn;
+      if (isLoggedIn && isOnSignIn) return AppRoutes.garage;
+      return null;
+    },
+    routes: [
+      GoRoute(
+        path: AppRoutes.signIn,
+        builder: (context, state) => const SignInScreen(),
+      ),
+      ShellRoute(
+        builder: (context, state, child) => AppShell(child: child),
+        routes: [
+          GoRoute(
+            path: AppRoutes.garage,
+            pageBuilder: (context, state) => const NoTransitionPage(
+              child: GarageScreen(),
+            ),
           ),
-        ),
-        GoRoute(
-          path: AppRoutes.scout,
-          pageBuilder: (context, state) => const NoTransitionPage(
-            child: ScoutScreen(),
+          GoRoute(
+            path: AppRoutes.scout,
+            pageBuilder: (context, state) => const NoTransitionPage(
+              child: ScoutScreen(),
+            ),
           ),
-        ),
-        GoRoute(
-          path: AppRoutes.profile,
-          pageBuilder: (context, state) => const NoTransitionPage(
-            child: ProfileScreen(),
+          GoRoute(
+            path: AppRoutes.profile,
+            pageBuilder: (context, state) => const NoTransitionPage(
+              child: ProfileScreen(),
+            ),
           ),
-        ),
-      ],
-    ),
-  ],
-);
+        ],
+      ),
+    ],
+  );
+
+  ref.onDispose(router.dispose);
+  return router;
+});

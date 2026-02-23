@@ -20,17 +20,17 @@ Future<void> main() async {
 }
 
 /// Root widget. Configures routing and light/dark theming.
-class MotoMuseApp extends StatelessWidget {
+class MotoMuseApp extends ConsumerWidget {
   /// Creates the root [MotoMuseApp] widget.
   const MotoMuseApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return MaterialApp.router(
       title: 'MotoMuse',
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
-      routerConfig: appRouter,
+      routerConfig: ref.watch(routerProvider),
       debugShowCheckedModeBanner: false,
     );
   }

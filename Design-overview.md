@@ -146,11 +146,18 @@ MVP success is reached when:
   - Users have a delightful onboarding experience where the system uses LLM integrations to extract information from bike photos, gives affirming, nuanced messages about their particular bikes, noting interesting details about their unique bike
   - Users can generate great motorcycle routes that they actually ride.
 
-Phase 1: Foundation (Current)
-  - Setup Flutter + Firebase
-  - Implement Auth (Google/Facebook/Email)
-  - Setup Cloud Run service skeleton for backend
-  - Success: User can log in and see a blank "Garage"
+Phase 1: Foundation (✅ Complete)
+  - Setup Flutter + Firebase ✅
+  - Implement Auth ✅
+    - Google OAuth (via google_sign_in) and Email/Password implemented
+    - Facebook sign-in deferred — requires Facebook Developer App setup; button removed from sign-in screen until configured
+    - On first sign-in, a user profile document is created in Firestore (users/{uid})
+    - Auth packages: firebase_auth ^5.0.0, google_sign_in ^6.2.0, cloud_firestore ^5.0.0
+    - Testing: fake_cloud_firestore ^3.0.0 used in data-layer tests (avoids mocking sealed Firestore classes)
+    - Router is auth-aware: unauthenticated users are redirected to /sign-in; authenticated users skip it
+    - Router implemented as a Riverpod Provider<GoRouter> with a _RouterNotifier ChangeNotifier bridging auth state to GoRouter.refreshListenable
+  - Setup Cloud Run service skeleton for backend (next step)
+  - Success: User can log in and see a blank "Garage" ✅
 
 Phase 2: The "Garage" & Vision
   - Implement Image Picker
