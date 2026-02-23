@@ -1,0 +1,13 @@
+# Claude Code memory (local session data, not for version control)
+.claude/
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Environment / secrets (never commit)
+*.env
+.env.*
+secrets/

@@ -1,0 +1,90 @@
+{
+  "project_info": {
+    "project_number": "498512468096",
+    "project_id": "motomuse-2b33f",
+    "storage_bucket": "motomuse-2b33f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:498512468096:android:dbc67c18446a6ef666ee65",
+        "android_client_info": {
+          "package_name": "com.example.moto_muse"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "498512468096-ahrrqajq1cu13c139aqcjf60gi97e6d3.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.moto_muse",
+            "certificate_hash": "9d839d6d2379adf790b47eeb0a8d644a0f70690b"
+          }
+        },
+        {
+          "client_id": "498512468096-4c11riquicq23dpefnm7mc56i06fijoo.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDt2ibXAgt4nXX5z9hC5VD8jst52XoDEZo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "498512468096-4c11riquicq23dpefnm7mc56i06fijoo.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "498512468096-k2d4gt882e31dpkjn5n3u917k5qm0hh3.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.motoMuse"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:498512468096:android:c278c26dc2554a4666ee65",
+        "android_client_info": {
+          "package_name": "com.kallispera.motomuse"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "498512468096-4c11riquicq23dpefnm7mc56i06fijoo.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDt2ibXAgt4nXX5z9hC5VD8jst52XoDEZo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "498512468096-4c11riquicq23dpefnm7mc56i06fijoo.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "498512468096-k2d4gt882e31dpkjn5n3u917k5qm0hh3.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.motoMuse"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

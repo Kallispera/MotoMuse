@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  flutter:
+    name: Flutter — Lint, Test & Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.9'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+        working-directory: app
+
+      - name: Verify formatting
+        run: dart format --output=none --set-exit-if-changed .
+        working-directory: app
+
+      - name: Analyse
+        run: flutter analyze --fatal-infos
+        working-directory: app
+
+      - name: Run tests with coverage
+        run: flutter test --coverage
+        working-directory: app
+
+      - name: Check coverage — overall floor (75%)
+        uses: VeryGoodOpenSource/very_good_coverage@v2
+        with:
+          path: app/coverage/lcov.info
+          min_coverage: 75
+          exclude: >-
+            **/*.g.dart
+            **/*.freezed.dart
+            **/firebase_options.dart
+            **/main.dart
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: app/coverage/lcov.info
+          flags: flutter
+          token: ${{ secrets.CODECOV_TOKEN }}
