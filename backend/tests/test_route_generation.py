@@ -4,11 +4,32 @@ All Google Maps API calls and Claude API calls are mocked. No network access
 occurs during these tests.
 """
 
+from unittest.mock import patch, MagicMock
+
 import pytest
 import pytest_asyncio
 
 import route_generation
 from models import RoutePreferences
+
+
+# ---------------------------------------------------------------------------
+# Shared mock for Street View metadata API (returns coverage OK)
+# ---------------------------------------------------------------------------
+
+
+def _mock_sv_coverage_ok(*args, **kwargs):
+    """Mock requests.get that always returns Street View coverage OK."""
+    resp = MagicMock()
+    # Extract lat/lng from the params to return them in the response.
+    params = kwargs.get("params", {})
+    loc_str = params.get("location", "0,0")
+    parts = loc_str.split(",")
+    resp.json.return_value = {
+        "status": "OK",
+        "location": {"lat": float(parts[0]), "lng": float(parts[1])},
+    }
+    return resp
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -529,13 +550,15 @@ def test_validate_route_flags_highway_heavy_route():
 # ---------------------------------------------------------------------------
 
 
-def test_get_street_view_urls_returns_up_to_3():
+@patch("route_generation.requests.get", side_effect=_mock_sv_coverage_ok)
+def test_get_street_view_urls_returns_up_to_3(mock_get):
     waypoints = [(51.5, -0.1), (51.6, -0.2), (51.7, -0.3), (51.8, -0.4)]
     urls = route_generation._get_street_view_urls(waypoints, "TEST_KEY")
     assert len(urls) == 3
 
 
-def test_get_street_view_urls_contain_lat_lng():
+@patch("route_generation.requests.get", side_effect=_mock_sv_coverage_ok)
+def test_get_street_view_urls_contain_lat_lng(mock_get):
     waypoints = [(51.5074, -0.1278)]
     urls = route_generation._get_street_view_urls(waypoints, "MY_KEY")
     assert len(urls) == 1
@@ -910,7 +933,8 @@ def test_compute_road_heading_empty_polyline():
 # ---------------------------------------------------------------------------
 
 
-def test_street_view_urls_include_heading():
+@patch("route_generation.requests.get", side_effect=_mock_sv_coverage_ok)
+def test_street_view_urls_include_heading(mock_get):
     """URLs should include a heading parameter when a polyline is provided."""
     waypoints = [(51.0, 0.0), (51.1, 0.0)]
     polyline = _encode_polyline([(51.0, 0.0), (51.05, 0.0), (51.1, 0.0)])
@@ -922,7 +946,8 @@ def test_street_view_urls_include_heading():
         assert "heading=" in url
 
 
-def test_street_view_urls_heading_fallback():
+@patch("route_generation.requests.get", side_effect=_mock_sv_coverage_ok)
+def test_street_view_urls_heading_fallback(mock_get):
     """Without a polyline, heading should default to 0."""
     waypoints = [(51.0, 0.0)]
     urls = route_generation._get_street_view_urls(waypoints, "KEY")
@@ -1065,3 +1090,214 @@ def test_encode_polyline_roundtrip():
     for (olat, olng), (dlat, dlng) in zip(original, decoded):
         assert abs(olat - dlat) < 0.00002
         assert abs(olng - dlng) < 0.00002
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _check_backtrack_spurs
+# ---------------------------------------------------------------------------
+
+
+def _make_spur_polyline():
+    """Creates a polyline with a dead-end spur for testing.
+
+    Route goes east, then north 1km (spur), then south 1km back, then east.
+    """
+    points = []
+    # Main route going east: many steps for enough samples.
+    for i in range(50):
+        points.append((52.0, 5.0 + i * 0.002))
+    # Spur: go north ~1km.
+    for i in range(20):
+        points.append((52.0 + i * 0.0005, 5.1))
+    # Spur: come back south ~1km (same corridor).
+    for i in range(20):
+        points.append((52.01 - i * 0.0005, 5.1))
+    # Continue main route east.
+    for i in range(50):
+        points.append((52.0, 5.1 + i * 0.002))
+    return _encode_polyline(points)
+
+
+def test_check_backtrack_spurs_clean_loop():
+    """A simple loop that doesn't retrace should have no spurs."""
+    points = []
+    for i in range(100):
+        points.append((51.0 + i * 0.005, 0.0))
+    for i in range(100):
+        points.append((51.5, 0.0 + i * 0.008))
+    for i in range(100):
+        points.append((51.5 - i * 0.005, 0.8))
+    for i in range(100):
+        points.append((51.0, 0.8 - i * 0.008))
+    encoded = _encode_polyline(points)
+    issues = route_generation._check_backtrack_spurs(encoded)
+    assert issues == []
+
+
+def test_check_backtrack_spurs_detects_spur():
+    """A route with a dead-end spur should be flagged."""
+    encoded = _make_spur_polyline()
+    issues = route_generation._check_backtrack_spurs(encoded)
+    assert len(issues) > 0
+    assert "spur" in issues[0].lower()
+
+
+def test_check_backtrack_spurs_ignores_short_spur():
+    """A very short backtrack (under 500m) should not be flagged."""
+    points = []
+    # Main route east.
+    for i in range(50):
+        points.append((52.0, 5.0 + i * 0.002))
+    # Tiny spur: go north ~150m and back.
+    for i in range(5):
+        points.append((52.0 + i * 0.0003, 5.1))
+    for i in range(5):
+        points.append((52.0015 - i * 0.0003, 5.1))
+    # Continue east.
+    for i in range(50):
+        points.append((52.0, 5.1 + i * 0.002))
+    encoded = _encode_polyline(points)
+    issues = route_generation._check_backtrack_spurs(encoded)
+    assert issues == []
+
+
+def test_check_backtrack_spurs_empty_polyline():
+    """Empty polyline should return no issues."""
+    assert route_generation._check_backtrack_spurs("") == []
+
+
+def test_validate_route_flags_backtrack_spur():
+    """_validate_route should flag a route with a dead-end spur."""
+    result = _make_directions_result()
+    # Replace overview_polyline with one containing a spur.
+    result[0]["overview_polyline"]["points"] = _make_spur_polyline()
+    issues = route_generation._validate_route(result)
+    assert any("spur" in i.lower() for i in issues)
+
+
+def test_waypoint_prompt_includes_dead_end_rule():
+    """The waypoint prompt should warn against dead-end roads."""
+    prompt = route_generation._WAYPOINT_GENERATION_PROMPT
+    assert "dead-end" in prompt.lower()
+    assert "through-road" in prompt.lower()
+
+
+def test_fix_prompt_includes_spur_guidance():
+    """The fix prompt should include spur guidance."""
+    prompt = route_generation._FIX_PROMPT
+    assert "spur" in prompt.lower()
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: Street View coverage
+# ---------------------------------------------------------------------------
+
+
+def _mock_sv_no_coverage(*args, **kwargs):
+    """Mock requests.get that returns no Street View coverage."""
+    resp = MagicMock()
+    resp.json.return_value = {"status": "ZERO_RESULTS"}
+    return resp
+
+
+@patch("route_generation.requests.get", side_effect=_mock_sv_coverage_ok)
+def test_check_street_view_coverage_ok(mock_get):
+    """Should return (True, lat, lng) when coverage exists."""
+    ok, lat, lng = route_generation._check_street_view_coverage(52.0, 5.0, "KEY")
+    assert ok is True
+    assert abs(lat - 52.0) < 0.01
+    assert abs(lng - 5.0) < 0.01
+
+
+@patch("route_generation.requests.get", side_effect=_mock_sv_no_coverage)
+def test_check_street_view_coverage_no_results(mock_get):
+    """Should return (False, original coords) when no coverage."""
+    ok, lat, lng = route_generation._check_street_view_coverage(52.0, 5.0, "KEY")
+    assert ok is False
+    assert lat == 52.0
+    assert lng == 5.0
+
+
+@patch("route_generation.requests.get", side_effect=Exception("Network error"))
+def test_check_street_view_coverage_handles_network_error(mock_get):
+    """Should return (False, original coords) on network error."""
+    ok, lat, lng = route_generation._check_street_view_coverage(52.0, 5.0, "KEY")
+    assert ok is False
+    assert lat == 52.0
+
+
+def test_find_street_view_along_route_finds_nearby():
+    """Should find coverage at a nearby polyline point."""
+    # Dense polyline points (~100m apart) so the search can accumulate distance.
+    polyline_points = [(52.0 + i * 0.001, 5.0) for i in range(100)]
+    checks = []
+
+    def mock_get(*args, **kwargs):
+        resp = MagicMock()
+        params = kwargs.get("params", {})
+        loc_str = params.get("location", "0,0")
+        parts = loc_str.split(",")
+        lat = float(parts[0])
+        checks.append(lat)
+        # Coverage exists only at points beyond lat 52.005.
+        if lat > 52.005:
+            resp.json.return_value = {
+                "status": "OK",
+                "location": {"lat": lat, "lng": 5.0},
+            }
+        else:
+            resp.json.return_value = {"status": "ZERO_RESULTS"}
+        return resp
+
+    with patch("route_generation.requests.get", side_effect=mock_get):
+        ok, lat, lng = route_generation._find_street_view_along_route(
+            52.0, 5.0, polyline_points, "KEY"
+        )
+    assert ok is True
+    assert lat > 52.005
+
+
+def test_find_street_view_along_route_no_coverage():
+    """Should return (False, ...) when no coverage found anywhere."""
+    polyline_points = [(52.0 + i * 0.005, 5.0) for i in range(20)]
+
+    with patch("route_generation.requests.get", side_effect=_mock_sv_no_coverage):
+        ok, lat, lng = route_generation._find_street_view_along_route(
+            52.0, 5.0, polyline_points, "KEY"
+        )
+    assert ok is False
+
+
+@patch("route_generation.requests.get", side_effect=_mock_sv_no_coverage)
+def test_get_street_view_urls_skips_no_coverage(mock_get):
+    """Should return fewer URLs when some waypoints have no coverage."""
+    waypoints = [(51.5, -0.1), (51.6, -0.2), (51.7, -0.3)]
+    urls = route_generation._get_street_view_urls(waypoints, "KEY")
+    assert len(urls) == 0
+
+
+def test_get_street_view_urls_uses_snapped_coordinates():
+    """URLs should use the panorama coordinates, not the original waypoint."""
+
+    def mock_get(*args, **kwargs):
+        resp = MagicMock()
+        # Always snap to 52.001, 5.001 regardless of input.
+        resp.json.return_value = {
+            "status": "OK",
+            "location": {"lat": 52.001, "lng": 5.001},
+        }
+        return resp
+
+    with patch("route_generation.requests.get", side_effect=mock_get):
+        urls = route_generation._get_street_view_urls([(52.0, 5.0)], "KEY")
+    assert len(urls) == 1
+    assert "52.001" in urls[0]
+    assert "5.001" in urls[0]
+
+
+@patch("route_generation.requests.get", side_effect=_mock_sv_no_coverage)
+def test_get_street_view_urls_returns_empty_when_no_coverage(mock_get):
+    """Should return empty list when no waypoints have coverage."""
+    waypoints = [(51.5, -0.1), (51.6, -0.2)]
+    urls = route_generation._get_street_view_urls(waypoints, "KEY")
+    assert urls == []

@@ -20,6 +20,8 @@ import os
 import re
 from typing import Any
 
+import requests
+
 import googlemaps
 from anthropic import AsyncAnthropic
 
@@ -59,10 +61,17 @@ HIGHWAY_STEP_KEYWORDS: frozenset = frozenset(
 UTURN_STEP_MAX_M: int = 200
 UTURN_BEARING_CHANGE: int = 150     # degrees
 # Polyline overlap detection (large-scale double-backs).
-OVERLAP_SAMPLE_INTERVAL_M: int = 500    # sample one point every 500m
+OVERLAP_SAMPLE_INTERVAL_M: int = 300    # sample one point every 300m
 OVERLAP_PROXIMITY_THRESHOLD_M: int = 150  # points closer than this "overlap"
 OVERLAP_MIN_INDEX_GAP: int = 5          # ignore adjacent samples
-OVERLAP_FRACTION_LIMIT: float = 0.05    # fail if >5% of sampled points overlap
+OVERLAP_FRACTION_LIMIT: float = 0.03    # fail if >3% of sampled points overlap
+# Dead-end spur detection: catch segments where the route goes out along
+# a road and comes back along the same corridor.
+SPUR_SAMPLE_INTERVAL_M: int = 200       # sample one point every 200m
+SPUR_PROXIMITY_M: int = 100             # two points this close may be a spur endpoint
+SPUR_MIN_INDEX_GAP: int = 8             # minimum samples apart to be "non-adjacent"
+SPUR_PATH_RATIO: float = 5.0            # path_distance / straight_distance threshold
+SPUR_MIN_LENGTH_M: int = 500            # ignore spurs shorter than this
 # Urban density detection — routes through cities produce many short steps
 # with frequent turns. Flag the route if too many steps are short.
 URBAN_SHORT_STEP_THRESHOLD_M: int = 300    # steps shorter than this are "urban-style"
@@ -78,6 +87,8 @@ STREET_VIEW_IMAGE_COUNT: int = 3    # images shown on the route preview screen
 STREET_VIEW_SIZE: str = "400x240"   # pixel dimensions (width x height)
 STREET_VIEW_FOV: int = 90           # horizontal field of view in degrees
 STREET_VIEW_PITCH: int = 10         # camera tilt above horizon in degrees
+STREET_VIEW_SEARCH_RADIUS_M: int = 2000   # max distance to search for SV coverage
+STREET_VIEW_SEARCH_INTERVAL_M: int = 500  # check every 500m along route
 
 # System prompt to force JSON-only responses from Claude.
 _JSON_SYSTEM_PROMPT = (
@@ -312,6 +323,10 @@ matters as much as the waypoints themselves. Avoid forcing connections through \
 urban areas.
 10. Space waypoints so the total route distance (via roads) roughly matches \
 the requested distance.
+11. NEVER place a waypoint at the end of a dead-end road, cul-de-sac, or \
+road that only has one way in and out (e.g. waterfront lookout points, \
+harbour parking areas, nature reserve access roads). Every waypoint must be \
+on a through-road that connects to other roads in at least two directions.
 {previous_context}
 Return ONLY a JSON array of {n_waypoints} waypoints: \
 [{{"lat": ..., "lng": ...}}, ...]
@@ -547,6 +562,7 @@ def _validate_route(result: list[dict[str, Any]]) -> list[str]:
     overview = route.get("overview_polyline", {}).get("points", "")
     if overview:
         issues.extend(_check_polyline_overlap(overview))
+        issues.extend(_check_backtrack_spurs(overview))
 
     # Check for urban density: too many short steps indicate city routing.
     if steps:
@@ -753,6 +769,76 @@ def _check_polyline_overlap(overview_polyline: str) -> list[str]:
             f"(limit: {OVERLAP_FRACTION_LIMIT:.0%})."
         ]
     return []
+
+
+def _check_backtrack_spurs(overview_polyline: str) -> list[str]:
+    """Detects dead-end spurs where the route backtracks along the same corridor.
+
+    Walks through sampled polyline points and flags segments where two
+    non-adjacent points are geographically close but the path between them
+    is disproportionately long (indicating a there-and-back pattern).
+    """
+    points = _decode_polyline(overview_polyline)
+    if len(points) < 2:
+        return []
+
+    # Sample points at regular intervals.
+    sampled = [points[0]]
+    accumulated_m = 0.0
+    for i in range(1, len(points)):
+        d = _haversine_m(
+            points[i - 1][0], points[i - 1][1],
+            points[i][0], points[i][1],
+        )
+        accumulated_m += d
+        if accumulated_m >= SPUR_SAMPLE_INTERVAL_M:
+            sampled.append(points[i])
+            accumulated_m = 0.0
+
+    if len(sampled) < SPUR_MIN_INDEX_GAP * 2:
+        return []  # Route too short to meaningfully check.
+
+    # Pre-compute distances between consecutive samples for fast path-distance
+    # lookups.
+    seg_dist = []
+    for i in range(1, len(sampled)):
+        seg_dist.append(_haversine_m(
+            sampled[i - 1][0], sampled[i - 1][1],
+            sampled[i][0], sampled[i][1],
+        ))
+
+    issues: list[str] = []
+    for i in range(len(sampled)):
+        for j in range(i + SPUR_MIN_INDEX_GAP, len(sampled)):
+            # Skip start/end overlap for loops (first and last few samples).
+            if i < SPUR_MIN_INDEX_GAP and j > len(sampled) - SPUR_MIN_INDEX_GAP:
+                continue
+
+            straight = _haversine_m(
+                sampled[i][0], sampled[i][1],
+                sampled[j][0], sampled[j][1],
+            )
+            if straight > SPUR_PROXIMITY_M:
+                continue
+
+            # Points are close — compute path distance along the route.
+            path_dist = sum(seg_dist[i:j])
+            spur_length = path_dist / 2
+
+            if straight < 1:
+                # Avoid division by zero — points are essentially identical.
+                ratio = path_dist  # Treat as infinite ratio.
+            else:
+                ratio = path_dist / straight
+
+            if ratio > SPUR_PATH_RATIO and spur_length > SPUR_MIN_LENGTH_M:
+                issues.append(
+                    f"Dead-end spur detected: route backtracks ~{spur_length / 1000:.1f}km "
+                    f"near ({sampled[i][0]:.3f}, {sampled[i][1]:.3f})."
+                )
+                return issues  # One spur is enough to trigger a retry.
+
+    return issues
 
 
 # ---------------------------------------------------------------------------
@@ -964,26 +1050,128 @@ def _compute_road_heading(
     return _bearing(p1[0], p1[1], p2[0], p2[1])
 
 
+def _check_street_view_coverage(
+    lat: float, lng: float, api_key: str
+) -> tuple[bool, float, float]:
+    """Checks if Street View coverage exists at the given coordinates.
+
+    Uses the Street View Metadata API (free, no quota consumed).
+
+    Returns:
+        Tuple of (has_coverage, actual_lat, actual_lng).
+        If coverage exists, actual_lat/actual_lng are the coordinates of
+        the nearest panorama (may differ slightly from input).
+    """
+    try:
+        resp = requests.get(
+            f"{_STREETVIEW_BASE}/metadata",
+            params={"location": f"{lat},{lng}", "key": api_key},
+            timeout=5,
+        )
+        data = resp.json()
+        if data.get("status") == "OK":
+            loc = data.get("location", {})
+            return (
+                True,
+                float(loc.get("lat", lat)),
+                float(loc.get("lng", lng)),
+            )
+    except Exception:  # noqa: BLE001
+        logger.warning("Street View metadata check failed for %.4f,%.4f", lat, lng)
+    return (False, lat, lng)
+
+
+def _find_street_view_along_route(
+    lat: float,
+    lng: float,
+    polyline_points: list[tuple[float, float]],
+    api_key: str,
+) -> tuple[bool, float, float]:
+    """Searches along the route polyline for the nearest point with Street View.
+
+    Starting from the polyline point closest to (lat, lng), walks outward in
+    both directions checking every STREET_VIEW_SEARCH_INTERVAL_M for coverage.
+    """
+    if not polyline_points:
+        return (False, lat, lng)
+
+    # Find the nearest polyline point.
+    best_idx = 0
+    best_dist = float("inf")
+    for i, (plat, plng) in enumerate(polyline_points):
+        d = _haversine_m(lat, lng, plat, plng)
+        if d < best_dist:
+            best_dist = d
+            best_idx = i
+
+    # Walk outward in both directions from best_idx.
+    for direction in (1, -1):
+        accumulated_m = 0.0
+        idx = best_idx
+        last_checked_m = 0.0
+        while 0 <= idx < len(polyline_points) - 1:
+            next_idx = idx + direction
+            if not (0 <= next_idx < len(polyline_points)):
+                break
+            seg = _haversine_m(
+                polyline_points[idx][0], polyline_points[idx][1],
+                polyline_points[next_idx][0], polyline_points[next_idx][1],
+            )
+            accumulated_m += seg
+            if accumulated_m > STREET_VIEW_SEARCH_RADIUS_M:
+                break
+            if accumulated_m - last_checked_m >= STREET_VIEW_SEARCH_INTERVAL_M:
+                last_checked_m = accumulated_m
+                plat, plng = polyline_points[next_idx]
+                ok, sv_lat, sv_lng = _check_street_view_coverage(
+                    plat, plng, api_key
+                )
+                if ok:
+                    return (True, sv_lat, sv_lng)
+            idx = next_idx
+
+    return (False, lat, lng)
+
+
 def _get_street_view_urls(
     waypoints: list[tuple[float, float]],
     api_key: str,
     overview_polyline: str = "",
 ) -> list[str]:
-    """Returns Street View Static API URLs for up to 3 waypoints.
+    """Returns Street View Static API URLs for waypoints with verified coverage.
 
-    If an overview_polyline is provided, computes a heading at each waypoint
-    so the camera faces along the road direction.
+    For each waypoint, checks the Street View Metadata API (free) to verify
+    coverage exists. If not, searches along the route polyline for the nearest
+    point with coverage. Only returns URLs for locations with confirmed coverage.
     """
     polyline_points = (
         _decode_polyline(overview_polyline) if overview_polyline else []
     )
     urls = []
     for lat, lng in waypoints[:STREET_VIEW_IMAGE_COUNT]:
-        heading = _compute_road_heading(lat, lng, polyline_points)
+        # Check coverage at the exact waypoint.
+        has_coverage, sv_lat, sv_lng = _check_street_view_coverage(
+            lat, lng, api_key
+        )
+
+        if not has_coverage and polyline_points:
+            # Search along the route polyline for nearby coverage.
+            has_coverage, sv_lat, sv_lng = _find_street_view_along_route(
+                lat, lng, polyline_points, api_key
+            )
+
+        if not has_coverage:
+            logger.warning(
+                "No Street View coverage near waypoint %.4f,%.4f — skipping",
+                lat, lng,
+            )
+            continue
+
+        heading = _compute_road_heading(sv_lat, sv_lng, polyline_points)
         url = (
             f"{_STREETVIEW_BASE}"
             f"?size={STREET_VIEW_SIZE}"
-            f"&location={lat},{lng}"
+            f"&location={sv_lat},{sv_lng}"
             f"&fov={STREET_VIEW_FOV}"
             f"&pitch={STREET_VIEW_PITCH}"
             f"&heading={heading:.0f}"

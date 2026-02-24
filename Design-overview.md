@@ -101,6 +101,16 @@ Routes should be generated based on the following rules:
       Scenery - proximity to forests, waterways, coastlines, greenery
       Elevation changes
 
+Regional Riding Knowledge:
+  - Route generation should be informed by knowledge of renowned riding roads and regions for the user's country/locale
+  - On registration, the user's country (derived from locale or sign-up location) is stored on their profile and used as context for route generation
+  - The LLM prompt for waypoint selection includes region-specific riding knowledge — e.g. for the UK: Welsh valleys, Scottish Highlands, Peak District, North Yorkshire Moors; for the US: Blue Ridge Parkway, Pacific Coast Highway, Tail of the Dragon, etc.
+  - Waypoints should be biased toward areas known for excellent motorcycling (twisty roads, scenic passes, coastal routes, mountain roads) rather than placed purely by geometric distance from the start point
+  - Over multiple route generations, a user's routes should naturally explore the best riding areas accessible from their region, not just radiate outward from their start location
+  - This knowledge is supplied to the LLM via the system prompt as structured regional data, not hard-coded in application logic — making it easy to expand to new countries and refine over time
+  - As the feedback loop matures (see Continuous Improvement Model), user ratings further reinforce or adjust which regional areas produce highly-rated rides
+  - Regional data is maintained as a curated knowledge file (or Firestore collection) that maps country/region to notable riding areas with brief descriptors (road character, scenery type, elevation profile, best season)
+
 Each route generation must be checked for quality (validated programmatically against the route polyline):
   - No reusing roads on the same route unless strictly necessary (detected via polyline segment overlap check)
   - No u-turns (detected via bearing reversal within a short distance threshold)
@@ -198,3 +208,12 @@ Phase 4: Audio & Spotify
   - Integrate Spotify playlist generation (Claude brief → Spotify Search → Create Playlist)
   - Implement voiceover waypoints: pre-generate TTS audio for LLM-written landmark commentary, triggered by GPS position during the ride
   - Success: User's ride has a matched playlist and receives contextual audio commentary at points of interest
+
+Phase 5: Regional Riding Intelligence
+  - Build curated regional riding knowledge dataset (start with UK, US, EU core countries) mapping country/region to notable riding roads and areas with descriptors (road character, scenery type, elevation, best season)
+  - Store as a Firestore collection or structured knowledge file loadable by the route generation service
+  - Capture user country/locale at registration and persist on the user profile document
+  - Update the Claude Sonnet route generation prompt to include relevant regional riding knowledge as context, biasing waypoint selection toward known-good riding areas
+  - Instrument analytics to track whether routes touching known riding areas receive higher user ratings than those that don't
+  - Iterate regional data based on user feedback and rating patterns (ties into Continuous Improvement Model)
+  - Success: Routes consistently guide riders toward the best riding roads in their region; users report discovering roads they wouldn't have found on their own

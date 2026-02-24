@@ -37,6 +37,8 @@ that could land in water or cities).
 - Think about actual geography of the region: water bodies, mountains, forests
 - Prefer scenic motorcycle-friendly roads (mountain passes, dyke roads, etc.)
 - Think about the route *between* waypoints, not just the waypoints themselves
+- Never place a waypoint at a dead-end road, cul-de-sac, or road with only
+  one way in/out — every waypoint must be on a through-road
 
 ---
 
@@ -71,10 +73,24 @@ where too many non-adjacent samples are geographically close.
 
 | Constant | Default | What it does |
 |---|---|---|
-| `OVERLAP_SAMPLE_INTERVAL_M` | `500` | Distance between sampled polyline points in metres. |
+| `OVERLAP_SAMPLE_INTERVAL_M` | `300` | Distance between sampled polyline points in metres. |
 | `OVERLAP_PROXIMITY_THRESHOLD_M` | `150` | Two sampled points closer than this are considered overlapping. |
 | `OVERLAP_MIN_INDEX_GAP` | `5` | Minimum index distance between samples before they count as "non-adjacent". |
-| `OVERLAP_FRACTION_LIMIT` | `0.05` | Fail if more than 5% of sampled points overlap. |
+| `OVERLAP_FRACTION_LIMIT` | `0.03` | Fail if more than 3% of sampled points overlap. |
+
+**Dead-end spur detection:** The validator detects segments where the route
+goes out along a road and comes back along the same corridor (dead-end spurs).
+It samples the polyline, finds non-adjacent points that are geographically
+close, then checks if the path distance between them is disproportionately
+long compared to the straight-line distance.
+
+| Constant | Default | What it does |
+|---|---|---|
+| `SPUR_SAMPLE_INTERVAL_M` | `200` | Distance between sampled polyline points in metres. |
+| `SPUR_PROXIMITY_M` | `100` | Two sampled points closer than this may be spur endpoints. |
+| `SPUR_MIN_INDEX_GAP` | `8` | Minimum samples apart to count as "non-adjacent". |
+| `SPUR_PATH_RATIO` | `5.0` | path_distance / straight_distance threshold for flagging. |
+| `SPUR_MIN_LENGTH_M` | `500` | Ignore spurs shorter than this. |
 
 **Urban density detection:** Routes through cities produce many short steps with
 frequent turns. The validator counts steps shorter than a threshold.
@@ -105,9 +121,14 @@ waypoint generation, retry fixes, and narrative. Change to
 
 ## Step 6 — Street View images
 
-Three static Street View images are fetched at evenly-spaced waypoints and shown
-on the route preview screen. A `heading` parameter is computed from the route
-polyline bearing at each point so the camera faces along the road direction.
+Up to three Street View images are shown on the route preview screen. Before
+generating a URL, the backend checks the **Street View Metadata API** (free,
+no quota consumed) to verify coverage exists at each waypoint. If no coverage
+is found, it searches along the route polyline for the nearest point with
+coverage. Only URLs with confirmed coverage are returned.
+
+A `heading` parameter is computed from the route polyline bearing at each point
+so the camera faces along the road direction.
 
 | Constant | Default | What it does |
 |---|---|---|
@@ -115,6 +136,8 @@ polyline bearing at each point so the camera faces along the road direction.
 | `STREET_VIEW_SIZE` | `"400x240"` | Pixel dimensions. Must be a string in `WxH` format. |
 | `STREET_VIEW_FOV` | `90` | Horizontal field of view in degrees. |
 | `STREET_VIEW_PITCH` | `10` | Camera tilt above the horizon in degrees. |
+| `STREET_VIEW_SEARCH_RADIUS_M` | `2000` | Max distance to search along the route for Street View coverage. |
+| `STREET_VIEW_SEARCH_INTERVAL_M` | `500` | Check every 500m along the route for coverage. |
 
 ---
 
@@ -126,6 +149,7 @@ polyline bearing at each point so the camera faces along the road direction.
 | Faster generation (less cost) | Lower `MAX_ROUTE_ATTEMPTS`, lower waypoint counts |
 | More waypoints per route | Increase `LOOP_WAYPOINT_COUNT` / `ONEWAY_WAYPOINT_COUNT` |
 | Stricter about double-backs | Lower `OVERLAP_FRACTION_LIMIT`, lower `OVERLAP_PROXIMITY_THRESHOLD_M` |
+| Stricter about dead-end spurs | Lower `SPUR_MIN_LENGTH_M`, lower `SPUR_PATH_RATIO` |
 | Stricter about urban routing | Lower `URBAN_SHORT_STEP_FRACTION_LIMIT`, lower `URBAN_SHORT_STEP_THRESHOLD_M` |
 | Different narrative style | Edit `_NARRATIVE_PROMPT` in `route_generation.py` |
 | Change waypoint generation rules | Edit `_WAYPOINT_GENERATION_PROMPT` in `route_generation.py` |
