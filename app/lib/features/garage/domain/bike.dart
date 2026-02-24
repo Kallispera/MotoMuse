@@ -14,6 +14,7 @@ class Bike {
     required this.affirmingMessage,
     required this.imageUrl,
     required this.addedAt,
+    this.personalityLine = '',
     this.year,
     this.displacement,
     this.color,
@@ -49,7 +50,10 @@ class Bike {
   /// Motorcycle category (e.g. "sport", "cruiser", "adventure").
   final String? category;
 
-  /// LLM-generated message that celebrates this specific motorcycle.
+  /// One-liner about what this bike says about its rider.
+  final String personalityLine;
+
+  /// Interesting facts about this specific make/model.
   final String affirmingMessage;
 
   /// Firebase Storage download URL of the bike's photograph.
@@ -69,6 +73,7 @@ class Bike {
     String? trim,
     List<String>? modifications,
     String? category,
+    String? personalityLine,
     String? affirmingMessage,
     String? imageUrl,
     DateTime? addedAt,
@@ -83,6 +88,7 @@ class Bike {
       trim: trim ?? this.trim,
       modifications: modifications ?? this.modifications,
       category: category ?? this.category,
+      personalityLine: personalityLine ?? this.personalityLine,
       affirmingMessage: affirmingMessage ?? this.affirmingMessage,
       imageUrl: imageUrl ?? this.imageUrl,
       addedAt: addedAt ?? this.addedAt,
@@ -102,6 +108,7 @@ class Bike {
         other.trim == trim &&
         listEquals(other.modifications, modifications) &&
         other.category == category &&
+        other.personalityLine == personalityLine &&
         other.affirmingMessage == affirmingMessage &&
         other.imageUrl == imageUrl &&
         other.addedAt == addedAt;
@@ -118,6 +125,7 @@ class Bike {
         trim,
         Object.hashAll(modifications),
         category,
+        personalityLine,
         affirmingMessage,
         imageUrl,
         addedAt,

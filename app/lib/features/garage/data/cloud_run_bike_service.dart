@@ -23,6 +23,40 @@ class CloudRunBikeService {
   final http.Client _httpClient;
   final String _baseUrl;
 
+  /// Sends a list of bike summaries to `/garage-personality` and returns a
+  /// one-liner about what the collection says about its owner.
+  ///
+  /// Requires at least two bikes. Returns an empty string on any failure
+  /// rather than throwing, so the garage screen degrades gracefully.
+  Future<String> garagePersonality(
+    List<Map<String, dynamic>> bikes,
+  ) async {
+    final uri = Uri.parse('$_baseUrl/garage-personality');
+
+    final http.Response response;
+    try {
+      response = await _httpClient.post(
+        uri,
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode({'bikes': bikes}),
+      );
+    } on Exception {
+      return '';
+    }
+
+    if (response.statusCode != 200) return '';
+
+    try {
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map<String, dynamic>) {
+        return decoded['personality'] as String? ?? '';
+      }
+      return '';
+    } on FormatException {
+      return '';
+    }
+  }
+
   /// Sends [imageUrl] to `/analyze-bike` and returns a [BikeAnalysisResult].
   ///
   /// Throws [BikeException] on any network error, non-200 status, or

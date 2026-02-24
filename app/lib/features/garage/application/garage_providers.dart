@@ -35,7 +35,7 @@ final httpClientProvider = Provider<http.Client>(
 ///
 /// Override this in tests or flavours to point at a local server.
 const String _cloudRunBaseUrl =
-    'https://motomuse-backend-placeholder.a.run.app';
+    'https://motomuse-backend-887991427212.us-central1.run.app';
 
 /// Provides the Cloud Run base URL string.
 final cloudRunBaseUrlProvider = Provider<String>(
@@ -71,6 +71,33 @@ final userBikesProvider = StreamProvider<List<Bike>>((ref) {
   final uid = ref.watch(authStateChangesProvider).valueOrNull?.uid;
   if (uid == null) return const Stream.empty();
   return ref.watch(bikeRepositoryProvider).watchBikes(uid);
+});
+
+// ---------------------------------------------------------------------------
+// Garage personality — what the rider's collection says about them
+// ---------------------------------------------------------------------------
+
+/// Generates a one-liner about the rider's overall bike collection.
+///
+/// Returns `null` when the user has fewer than two bikes (no comparison to
+/// make). Refreshes automatically whenever the bike list changes.
+final garagePersonalityProvider = FutureProvider<String?>((ref) async {
+  final bikes = ref.watch(userBikesProvider).valueOrNull;
+  if (bikes == null || bikes.length < 2) return null;
+
+  final service = ref.read(cloudRunBikeServiceProvider);
+  final summaries = bikes
+      .map(
+        (b) => <String, dynamic>{
+          'make': b.make,
+          'model': b.model,
+          if (b.year != null) 'year': b.year,
+          if (b.category != null) 'category': b.category,
+        },
+      )
+      .toList();
+
+  return service.garagePersonality(summaries);
 });
 
 // ---------------------------------------------------------------------------

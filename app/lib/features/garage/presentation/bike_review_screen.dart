@@ -106,7 +106,13 @@ class _BikeReviewScreenState extends ConsumerState<BikeReviewScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _BikeImageHeader(imageUrl: widget.analysis.imageUrl),
-                const SizedBox(height: 20),
+                if (widget.analysis.result.personalityLine.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  _PersonalityLineCard(
+                    line: widget.analysis.result.personalityLine,
+                  ),
+                ],
+                const SizedBox(height: 12),
                 _AffirmingMessageCard(
                   message: widget.analysis.result.affirmingMessage,
                 ),
@@ -219,6 +225,7 @@ class _BikeReviewScreenState extends ConsumerState<BikeReviewScreen> {
       trim: _trimCtrl.text.trim().isEmpty ? null : _trimCtrl.text.trim(),
       modifications: _modifications,
       category: widget.analysis.result.category,
+      personalityLine: widget.analysis.result.personalityLine,
       affirmingMessage: widget.analysis.result.affirmingMessage,
       imageUrl: widget.analysis.imageUrl,
       addedAt: DateTime.now(),
@@ -250,6 +257,36 @@ class _BikeImageHeader extends StatelessWidget {
             color: Colors.grey.shade200,
             child: const Icon(Icons.two_wheeler, size: 64, color: Colors.grey),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PersonalityLineCard extends StatelessWidget {
+  const _PersonalityLineCard({required this.line});
+
+  final String line;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final color = isDark ? AppColors.gold : AppColors.amber;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isDark ? 0.12 : 0.08),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        line,
+        style: theme.textTheme.titleMedium?.copyWith(
+          fontWeight: FontWeight.w700,
+          height: 1.35,
+          color: isDark ? AppColors.gold : theme.colorScheme.onSurface,
         ),
       ),
     );
@@ -291,10 +328,10 @@ class _AffirmingMessageCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.auto_awesome, size: 16, color: borderColor),
+              Icon(Icons.history_edu_outlined, size: 16, color: borderColor),
               const SizedBox(width: 6),
               Text(
-                'Your bike',
+                'Did you know',
                 style: theme.textTheme.labelMedium?.copyWith(
                   color: borderColor,
                   fontWeight: FontWeight.w700,
@@ -308,7 +345,6 @@ class _AffirmingMessageCard extends StatelessWidget {
             message,
             style: theme.textTheme.bodyLarge?.copyWith(
               height: 1.55,
-              fontStyle: FontStyle.italic,
             ),
           ),
         ],

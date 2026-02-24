@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:motomuse/core/routing/app_router.dart';
+import 'package:motomuse/core/theme/app_colors.dart';
 import 'package:motomuse/features/garage/application/garage_providers.dart';
 import 'package:motomuse/features/garage/domain/bike.dart';
 
@@ -47,9 +48,13 @@ class GarageScreen extends ConsumerWidget {
             ),
           ),
         ),
-        data: (bikes) => bikes.isEmpty
-            ? _EmptyState(theme: theme)
-            : _BikeList(bikes: bikes),
+        data: (bikes) {
+          if (bikes.isEmpty) return _EmptyState(theme: theme);
+          final personality = bikes.length >= 2
+              ? ref.watch(garagePersonalityProvider).valueOrNull
+              : null;
+          return _BikeList(bikes: bikes, garagePersonality: personality);
+        },
       ),
     );
   }
@@ -101,16 +106,23 @@ class _EmptyState extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _BikeList extends StatelessWidget {
-  const _BikeList({required this.bikes});
+  const _BikeList({required this.bikes, this.garagePersonality});
 
   final List<Bike> bikes;
+  final String? garagePersonality;
 
   @override
   Widget build(BuildContext context) {
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
-      itemCount: bikes.length,
-      itemBuilder: (context, index) => _BikeCard(bike: bikes[index]),
+      itemCount: bikes.length + (garagePersonality != null ? 1 : 0),
+      itemBuilder: (context, index) {
+        if (garagePersonality != null && index == 0) {
+          return _GaragePersonalityBanner(text: garagePersonality!);
+        }
+        final bikeIndex = garagePersonality != null ? index - 1 : index;
+        return _BikeCard(bike: bikes[bikeIndex]);
+      },
     );
   }
 }
@@ -177,6 +189,51 @@ class _BikeCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Garage personality banner
+// ---------------------------------------------------------------------------
+
+class _GaragePersonalityBanner extends StatelessWidget {
+  const _GaragePersonalityBanner({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final color = isDark ? AppColors.gold : AppColors.amber;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isDark ? 0.10 : 0.07),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: color.withValues(alpha: isDark ? 0.3 : 0.25),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.local_fire_department_outlined, size: 18, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

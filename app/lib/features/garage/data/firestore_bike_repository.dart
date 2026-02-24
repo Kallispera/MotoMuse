@@ -83,6 +83,7 @@ class FirestoreBikeRepository implements BikeRepository {
               ?.cast<String>() ??
           const [],
       category: data['category'] as String?,
+      personalityLine: data['personalityLine'] as String? ?? '',
       affirmingMessage: data['affirmingMessage'] as String? ?? '',
       imageUrl: data['imageUrl'] as String? ?? '',
       addedAt: (data['addedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
@@ -100,6 +101,7 @@ class FirestoreBikeRepository implements BikeRepository {
       if (bike.trim != null) 'trim': bike.trim,
       'modifications': bike.modifications,
       if (bike.category != null) 'category': bike.category,
+      'personalityLine': bike.personalityLine,
       'affirmingMessage': bike.affirmingMessage,
       'imageUrl': bike.imageUrl,
       'addedAt': FieldValue.serverTimestamp(),

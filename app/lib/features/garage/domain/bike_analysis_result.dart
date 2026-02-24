@@ -13,6 +13,7 @@ class BikeAnalysisResult {
     required this.make,
     required this.model,
     required this.affirmingMessage,
+    this.personalityLine = '',
     this.year,
     this.displacement,
     this.color,
@@ -37,6 +38,7 @@ class BikeAnalysisResult {
               ?.cast<String>() ??
           const [],
       category: json['category'] as String?,
+      personalityLine: json['personality_line'] as String? ?? '',
       affirmingMessage: json['affirming_message'] as String? ?? '',
     );
   }
@@ -65,7 +67,11 @@ class BikeAnalysisResult {
   /// Motorcycle category (e.g. "sport", "cruiser"), or `null`.
   final String? category;
 
-  /// LLM-generated message celebrating this specific motorcycle.
+  /// One-liner about what this bike says about its rider.
+  final String personalityLine;
+
+  /// Interesting facts about this specific make/model — performance figures,
+  /// race heritage, engineering quirks, historical significance.
   final String affirmingMessage;
 
   @override
@@ -80,6 +86,7 @@ class BikeAnalysisResult {
         other.trim == trim &&
         listEquals(other.modifications, modifications) &&
         other.category == category &&
+        other.personalityLine == personalityLine &&
         other.affirmingMessage == affirmingMessage;
   }
 
@@ -93,6 +100,7 @@ class BikeAnalysisResult {
         trim,
         Object.hashAll(modifications),
         category,
+        personalityLine,
         affirmingMessage,
       );
 
