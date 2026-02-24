@@ -174,12 +174,12 @@ async def generate(
     )
 
     # Build final result.
-    leg = directions_result["routes"][0]["legs"][0]
+    # directions_result is already result[0] from the Directions API response
+    # (a single route dict), so index "legs" directly — not "routes"][0].
+    leg = directions_result["legs"][0]
     distance_km = leg["distance"]["value"] / 1000
     duration_min = leg["duration"]["value"] // 60
-    encoded_polyline = directions_result["routes"][0]["overview_polyline"][
-        "points"
-    ]
+    encoded_polyline = directions_result["overview_polyline"]["points"]
 
     waypoints = [
         RouteWaypoint(lat=lat, lng=lng) for lat, lng in selected
