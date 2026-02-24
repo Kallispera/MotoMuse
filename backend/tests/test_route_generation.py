@@ -72,6 +72,7 @@ def _make_directions_result(distance_m=150000, duration_s=5400):
                     "distance": {"value": distance_m, "text": "150 km"},
                     "duration": {"value": duration_s, "text": "1 hour 30 mins"},
                     "start_address": "London, UK",
+                    "end_address": "London, UK",
                     "steps": [
                         {
                             "distance": {"value": 5000},
@@ -111,11 +112,12 @@ def _make_multi_leg_directions_result():
                     "distance": {"value": 24000, "text": "24 km"},
                     "duration": {"value": 1440, "text": "24 mins"},
                     "start_address": "London, UK",
+                    "end_address": "Some Town",
                     "steps": [
                         {
                             "distance": {"value": 24000},
                             "duration": {"value": 1440},
-                            "html_instructions": "Head north on A road",
+                            "html_instructions": "Head north on <b>A road</b>",
                             "start_location": {"lat": 51.5, "lng": -0.1},
                             "end_location": {"lat": 51.7, "lng": -0.2},
                             "polyline": {"points": _encode_polyline(
@@ -128,11 +130,12 @@ def _make_multi_leg_directions_result():
                     "distance": {"value": 38000, "text": "38 km"},
                     "duration": {"value": 2280, "text": "38 mins"},
                     "start_address": "Some Town",
+                    "end_address": "Another Town",
                     "steps": [
                         {
                             "distance": {"value": 38000},
                             "duration": {"value": 2280},
-                            "html_instructions": "Continue on scenic road",
+                            "html_instructions": "Continue on <b>scenic road</b>",
                             "start_location": {"lat": 51.7, "lng": -0.2},
                             "end_location": {"lat": 51.9, "lng": -0.4},
                             "polyline": {"points": _encode_polyline(
@@ -145,6 +148,7 @@ def _make_multi_leg_directions_result():
                     "distance": {"value": 38000, "text": "38 km"},
                     "duration": {"value": 2280, "text": "38 mins"},
                     "start_address": "Another Town",
+                    "end_address": "London, UK",
                     "steps": [
                         {
                             "distance": {"value": 38000},
@@ -202,6 +206,7 @@ def _make_urban_directions_result(n_short=15, n_long=5):
                     "distance": {"value": total_distance, "text": f"{total_distance}m"},
                     "duration": {"value": total_duration, "text": f"{total_duration}s"},
                     "start_address": "Amsterdam, NL",
+                    "end_address": "Amsterdam, NL",
                     "steps": all_steps,
                 }
             ],
@@ -215,46 +220,47 @@ class _MockMapsClient:
     def __init__(
         self,
         geocode_result=None,
-        elevation_result=None,
-        places_result=None,
         directions_result=None,
+        reverse_geocode_result=None,
     ):
-        self._geocode = geocode_result or [
-            {"geometry": {"location": {"lat": 51.5074, "lng": -0.1278}}}
-        ]
-        self._elevation = elevation_result
-        self._places = places_result or {"results": []}
+        self._geocode = (
+            geocode_result if geocode_result is not None
+            else [{"geometry": {"location": {"lat": 51.5074, "lng": -0.1278}}}]
+        )
         self._directions = (
-            directions_result
-            if directions_result is not None
+            directions_result if directions_result is not None
             else _make_directions_result()
+        )
+        self._reverse_geocode = (
+            reverse_geocode_result if reverse_geocode_result is not None
+            else [{"formatted_address": "London, Greater London, UK"}]
         )
 
     def geocode(self, address):
         return self._geocode
 
-    def elevation(self, locations):
-        if self._elevation is not None:
-            return self._elevation
-        return [{"elevation": 50.0} for _ in locations]
-
-    def places_nearby(self, location, radius, keyword, type):  # noqa: A002
-        return self._places
+    def reverse_geocode(self, latlng):
+        return self._reverse_geocode
 
     def directions(self, **kwargs):
         return self._directions
 
 
 class _MockClaudeClient:
-    """Minimal mock of AsyncAnthropic for testing."""
+    """Minimal mock of AsyncAnthropic for testing.
+
+    Returns waypoint JSON for all calls except when the prompt contains
+    "route description" (which indicates a narrative generation request).
+    """
 
     def __init__(self, waypoint_response=None, narrative_response=None):
-        # Default waypoint response: valid JSON array.
+        # Default waypoint response: valid JSON array of 5 waypoints (loop).
         self._waypoint_json = waypoint_response or (
             '[{"lat": 51.6, "lng": -0.2}, '
             '{"lat": 51.7, "lng": -0.3}, '
             '{"lat": 51.8, "lng": -0.4}, '
-            '{"lat": 51.65, "lng": -0.35}]'
+            '{"lat": 51.75, "lng": -0.35}, '
+            '{"lat": 51.65, "lng": -0.25}]'
         )
         self._narrative = narrative_response or (
             "This route winds through ancient oak forest, cresting at a ridge "
@@ -269,12 +275,12 @@ class _MockClaudeClient:
             async def create(inner_self, **kwargs):
                 inner_self  # noqa: B018
                 self._call_count += 1
-                # First call = waypoint selection; subsequent calls = narrative or fix.
-                content = (
-                    self._waypoint_json
-                    if self._call_count == 1
-                    else self._narrative
-                )
+                # Detect narrative prompt vs waypoint prompt.
+                msg = kwargs.get("messages", [{}])[0].get("content", "")
+                if "route description" in msg.lower():
+                    content = self._narrative
+                else:
+                    content = self._waypoint_json
 
                 class _Response:
                     class _Content:
@@ -329,27 +335,127 @@ async def test_geocode_raises_when_api_returns_no_results():
 
 
 # ---------------------------------------------------------------------------
-# Unit tests: _build_candidate_waypoints
+# Unit tests: _reverse_geocode_region
 # ---------------------------------------------------------------------------
 
 
-def test_build_candidate_waypoints_loop_returns_6_points():
-    pts = route_generation._build_candidate_waypoints(51.5, -0.1, 150, loop=True)
-    assert len(pts) == 6
+def test_reverse_geocode_region_returns_address():
+    maps = _MockMapsClient(
+        reverse_geocode_result=[{"formatted_address": "Almere, Flevoland, NL"}]
+    )
+    result = route_generation._reverse_geocode_region(maps, 52.35, 5.26)
+    assert result == "Almere, Flevoland, NL"
 
 
-def test_build_candidate_waypoints_oneway_returns_4_points():
-    pts = route_generation._build_candidate_waypoints(51.5, -0.1, 100, loop=False)
-    assert len(pts) == 4
+def test_reverse_geocode_region_falls_back_on_error():
+    """Should return lat,lng string if reverse geocoding fails."""
+
+    class _FailingMaps(_MockMapsClient):
+        def reverse_geocode(self, latlng):
+            raise RuntimeError("API error")
+
+    maps = _FailingMaps()
+    result = route_generation._reverse_geocode_region(maps, 52.35, 5.26)
+    assert result == "52.35,5.26"
 
 
-def test_build_candidate_waypoints_all_near_start():
-    """All waypoints should be within a reasonable distance of the start."""
-    pts = route_generation._build_candidate_waypoints(51.5, -0.1, 150, loop=True)
-    for lat, lng in pts:
-        # With distance=150km, no waypoint should be more than ~40° away.
-        assert abs(lat - 51.5) < 5
-        assert abs(lng - -0.1) < 10
+# ---------------------------------------------------------------------------
+# Unit tests: _generate_waypoints
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_waypoints_returns_parsed_coordinates():
+    """Claude's JSON response should be parsed into (lat, lng) tuples."""
+    claude = _MockClaudeClient(
+        waypoint_response=(
+            '[{"lat": 52.0, "lng": 5.0}, '
+            '{"lat": 52.1, "lng": 5.1}, '
+            '{"lat": 52.2, "lng": 5.2}, '
+            '{"lat": 52.15, "lng": 5.15}, '
+            '{"lat": 52.05, "lng": 5.05}]'
+        )
+    )
+    result = await route_generation._generate_waypoints(
+        claude, 52.35, 5.26, "Almere, NL", _PREFS
+    )
+    assert len(result) == 5
+    assert result[0] == (52.0, 5.0)
+
+
+@pytest.mark.asyncio
+async def test_generate_waypoints_raises_on_invalid_json():
+    """Should raise ValueError if Claude returns non-JSON."""
+    claude = _MockClaudeClient(waypoint_response="I don't know any roads there")
+    with pytest.raises(ValueError, match="valid waypoint JSON"):
+        await route_generation._generate_waypoints(
+            claude, 52.35, 5.26, "Almere, NL", _PREFS
+        )
+
+
+@pytest.mark.asyncio
+async def test_generate_waypoints_includes_previous_context():
+    """When retrying, the prompt should include previous failure details."""
+    captured_prompt = {}
+
+    class _CapturingClaude:
+        class _Messages:
+            async def create(self, **kwargs):
+                captured_prompt["content"] = kwargs["messages"][0]["content"]
+
+                class _Response:
+                    class _Content:
+                        text = (
+                            '[{"lat": 52.0, "lng": 5.0}, '
+                            '{"lat": 52.1, "lng": 5.1}, '
+                            '{"lat": 52.2, "lng": 5.2}, '
+                            '{"lat": 52.15, "lng": 5.15}, '
+                            '{"lat": 52.05, "lng": 5.05}]'
+                        )
+                    content = [_Content()]
+                return _Response()
+
+        messages = _Messages()
+
+    claude = _CapturingClaude()
+    await route_generation._generate_waypoints(
+        claude, 52.35, 5.26, "Almere, NL", _PREFS,
+        previous_issues=["Route uses highways for 15% of total distance"],
+        route_summary="Leg 1: Almere → Amsterdam (45 km)\n  - Take A6 motorway",
+    )
+
+    prompt = captured_prompt["content"]
+    assert "PREVIOUS ATTEMPT" in prompt
+    assert "highway" in prompt.lower()
+    assert "A6" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _extract_route_summary
+# ---------------------------------------------------------------------------
+
+
+def test_extract_route_summary_basic():
+    """Should extract leg addresses and step instructions."""
+    result = _make_multi_leg_directions_result()[0]
+    summary = route_generation._extract_route_summary(result)
+    assert "London, UK" in summary
+    assert "Some Town" in summary
+    assert "A road" in summary
+    assert "scenic road" in summary
+
+
+def test_extract_route_summary_none_input():
+    """Should return empty string for None input."""
+    assert route_generation._extract_route_summary(None) == ""
+
+
+def test_extract_route_summary_strips_html():
+    """Should strip HTML tags from instructions."""
+    result = _make_multi_leg_directions_result()[0]
+    summary = route_generation._extract_route_summary(result)
+    assert "<b>" not in summary
+    assert "</b>" not in summary
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +571,8 @@ async def test_generate_one_way_route():
         waypoint_response=(
             '[{"lat": 51.6, "lng": -0.2}, '
             '{"lat": 51.7, "lng": -0.3}, '
-            '{"lat": 51.8, "lng": -0.4}]'
+            '{"lat": 51.8, "lng": -0.4}, '
+            '{"lat": 51.85, "lng": -0.45}]'
         )
     )
 
@@ -524,7 +631,7 @@ async def test_generate_retries_on_validation_failure():
 
 @pytest.mark.asyncio
 async def test_generate_falls_back_after_max_retries():
-    """After 3 failed validations the pipeline should still return a result."""
+    """After 5 failed validations the pipeline should still return a result."""
 
     class _AlwaysHighwayMaps(_MockMapsClient):
         def directions(self, **kwargs):
@@ -637,14 +744,21 @@ async def test_generate_multi_leg_returns_total_distance():
 # ---------------------------------------------------------------------------
 
 
-def test_waypoint_prompt_includes_urban_avoidance():
-    """The waypoint selection prompt should instruct Claude to avoid cities."""
-    prompt = route_generation._WAYPOINT_SELECTION_PROMPT
-    assert "city centres" in prompt
-    assert "urban" in prompt.lower()
-    assert "water bodies" in prompt.lower()
-    assert "route between waypoints" in prompt.lower()
-    assert "dead-end" in prompt.lower()
+def test_waypoint_generation_prompt_includes_key_rules():
+    """The waypoint generation prompt should contain critical routing rules."""
+    prompt = route_generation._WAYPOINT_GENERATION_PROMPT
+    assert "water" in prompt.lower()
+    assert "city" in prompt.lower()
+    assert "rural" in prompt.lower()
+    assert "ACTUAL GEOGRAPHY" in prompt
+    assert "ROUTE BETWEEN" in prompt
+
+
+def test_fix_prompt_includes_route_summary():
+    """The fix prompt should include route summary for geographic context."""
+    prompt = route_generation._FIX_PROMPT
+    assert "route_summary" in prompt
+    assert "ACTUAL ROADS" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -793,13 +907,13 @@ async def test_key_waypoints_from_selected_not_steps():
     """_build_and_validate should use input waypoints for key_waypoints."""
     maps = _MockMapsClient()
 
-    waypoints_in = [(51.6, -0.2), (51.7, -0.3), (51.8, -0.4), (51.65, -0.35)]
+    waypoints_in = [(51.6, -0.2), (51.7, -0.3), (51.8, -0.4), (51.65, -0.35), (51.55, -0.25)]
     result, issues = await route_generation._build_and_validate(
         maps, 51.5074, -0.1278, waypoints_in, _PREFS
     )
     assert result is not None
     key_wps = result["key_waypoints"]
-    # With 4 input waypoints and STREET_VIEW_IMAGE_COUNT=3,
+    # With 5 input waypoints and STREET_VIEW_IMAGE_COUNT=3,
     # should pick 3 evenly spaced from the input list.
     assert len(key_wps) == 3
     # First and last should match input waypoints.
@@ -860,19 +974,6 @@ def test_validate_route_flags_dutch_motorway():
     ]
     issues = route_generation._validate_route(result)
     assert any("highway" in i.lower() for i in issues)
-
-
-# ---------------------------------------------------------------------------
-# Prompt content tests: fix prompt
-# ---------------------------------------------------------------------------
-
-
-def test_fix_prompt_includes_dead_end_guidance():
-    """The fix prompt should mention dead-end spurs and urban corridors."""
-    prompt = route_generation._FIX_PROMPT
-    assert "dead-end" in prompt.lower()
-    assert "urban" in prompt.lower()
-    assert "peninsula" in prompt.lower() or "spur" in prompt.lower()
 
 
 # ---------------------------------------------------------------------------

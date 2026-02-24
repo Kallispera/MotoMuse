@@ -1,17 +1,15 @@
 """Motorcycle route generation pipeline.
 
-Nine-step async pipeline:
-  1.  Geocode the start location via the Google Maps Geocoding API.
-  2.  Generate candidate waypoints geometrically (loop or one-way spread).
-  3.  Fetch elevation profiles for all candidates via the Elevation API.
-  4.  Score scenery proximity via the Places API (forests, coastlines, etc.).
-  5.  Claude Sonnet selects and orders the best waypoints.
-  6.  Build a navigable route via the Directions API (avoid highways).
-  7.  Validate the route polyline; retry up to 3× feeding failures back to Claude.
-  8.  Claude Sonnet generates a narrative description of the route.
-  9.  Fetch Street View Static images at 2–3 scenic waypoints.
+Five-step async pipeline:
+  1.  Geocode the start location and reverse-geocode to get region context.
+  2.  Claude Sonnet generates waypoints using real geographic knowledge.
+  3.  Build a navigable route via the Directions API (avoid highways).
+  4.  Validate the route polyline; retry up to 5× feeding route details back
+      to Claude so it can make informed adjustments.
+  5.  Claude Sonnet generates a narrative description of the route.
+  6.  Fetch Street View Static images at 2–3 scenic waypoints.
 
-Claude Sonnet (claude-sonnet-4-6) is used for steps 5 and 8.
+Claude Sonnet (claude-sonnet-4-6) is used for steps 2, 4 retries, and 5.
 Google Maps Python client (googlemaps) handles all Google API calls.
 """
 
@@ -19,7 +17,6 @@ import json
 import logging
 import math
 import os
-import random
 from typing import Any
 
 import googlemaps
@@ -37,21 +34,10 @@ logger = logging.getLogger(__name__)
 # Claude model used for waypoint selection and narrative generation.
 ROUTE_MODEL: str = "claude-sonnet-4-6"
 
-# -- Candidate waypoint geometry ------------------------------------------
-# How many geographic candidates are generated before Claude picks the best.
-LOOP_CANDIDATE_COUNT: int = 6       # points spread around a circle
-ONEWAY_CANDIDATE_COUNT: int = 4     # points spread along a forward arc
-# Random radius variation so the route isn't a perfect hexagon/line.
-WAYPOINT_JITTER: float = 0.20       # ±20 % applied to each candidate's radius
-
-# -- Waypoint selection (how many Claude actually uses) -------------------
-LOOP_WAYPOINT_SELECT: int = 4       # waypoints Claude picks for a loop
-ONEWAY_WAYPOINT_SELECT: int = 3     # waypoints Claude picks for a one-way
-
-# -- Scenery scoring (Places API) -----------------------------------------
-SCENERY_SEARCH_RADIUS_M: int = 5_000  # metres radius for nearby-places search
-SCENERY_KEYWORDS_USED: int = 2        # keywords checked per candidate (API cost)
-SCENERY_SATURATION: int = 5           # result count that maps to a perfect score
+# -- Waypoint generation ---------------------------------------------------
+# How many waypoints Claude generates for each route type.
+LOOP_WAYPOINT_COUNT: int = 5        # waypoints for a loop route
+ONEWAY_WAYPOINT_COUNT: int = 4      # waypoints for a one-way route
 
 # -- Route validation -----------------------------------------------------
 # Highway/motorway fraction — fail the route if more than this share of the
@@ -81,7 +67,10 @@ OVERLAP_FRACTION_LIMIT: float = 0.05    # fail if >5% of sampled points overlap
 URBAN_SHORT_STEP_THRESHOLD_M: int = 300    # steps shorter than this are "urban-style"
 URBAN_SHORT_STEP_FRACTION_LIMIT: float = 0.30  # fail if >30% of steps are short
 # Maximum validation attempts before accepting the best-effort route.
-MAX_ROUTE_ATTEMPTS: int = 3
+MAX_ROUTE_ATTEMPTS: int = 5
+# On this attempt number and beyond, regenerate completely new waypoints
+# instead of adjusting the existing ones.
+FRESH_REGEN_ATTEMPT: int = 3
 
 # -- Street View images ---------------------------------------------------
 STREET_VIEW_IMAGE_COUNT: int = 3    # images shown on the route preview screen
@@ -121,11 +110,10 @@ async def generate(
         googlemaps.exceptions.ApiError: On Google Maps API failures.
         anthropic.APIError: On Claude API failures.
     """
-    _maps = maps_client or googlemaps.Client(
-        key=os.environ["GOOGLE_MAPS_API_KEY"]
-    )
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+    _maps = maps_client or googlemaps.Client(key=api_key)
     _claude = claude_client or AsyncAnthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"]
+        api_key=os.environ.get("ANTHROPIC_API_KEY", "")
     )
 
     logger.info(
@@ -140,25 +128,17 @@ async def generate(
     start_lat, start_lng = await _geocode(_maps, prefs.start_location)
     logger.info("Geocoded start: %f, %f", start_lat, start_lng)
 
-    # Step 2: Generate candidate waypoints.
-    candidates = _build_candidate_waypoints(
-        start_lat, start_lng, prefs.distance_km, prefs.loop
+    # Reverse-geocode to get a human-readable region name for Claude.
+    start_region = _reverse_geocode_region(_maps, start_lat, start_lng)
+    logger.info("Start region: %s", start_region)
+
+    # Step 2: Claude generates waypoints using geographic knowledge.
+    selected = await _generate_waypoints(
+        _claude, start_lat, start_lng, start_region, prefs
     )
-    logger.info("Generated %d candidate waypoints", len(candidates))
+    logger.info("Claude generated %d waypoints", len(selected))
 
-    # Step 3: Elevation data for each candidate.
-    elevations = await _get_elevations(_maps, candidates)
-
-    # Step 4: Scenery scores via Places API.
-    scenery_scores = await _score_scenery(_maps, candidates, prefs.scenery_type)
-
-    # Step 5: Claude selects and orders waypoints.
-    selected = await _select_waypoints(
-        _claude, candidates, elevations, scenery_scores, prefs
-    )
-    logger.info("Claude selected %d waypoints", len(selected))
-
-    # Steps 6–7: Build route, validate, retry.
+    # Steps 3–4: Build route, validate, retry with route feedback.
     directions_result = None
     last_issues: list[str] = []
     for attempt in range(MAX_ROUTE_ATTEMPTS):
@@ -172,18 +152,34 @@ async def generate(
             "Attempt %d failed validation: %s", attempt + 1, last_issues
         )
         if attempt < MAX_ROUTE_ATTEMPTS - 1:
-            selected = await _fix_waypoints(
-                _claude, selected, last_issues, prefs
-            )
+            # Extract what actually went wrong from the Directions response
+            # so Claude can see road names, cities, and distances.
+            route_summary = _extract_route_summary(directions_result)
+            if attempt + 1 >= FRESH_REGEN_ATTEMPT:
+                # Later retries: ask Claude to generate entirely new waypoints
+                # with the failed route as negative context.
+                logger.info(
+                    "Attempt %d: full waypoint regeneration", attempt + 2
+                )
+                selected = await _generate_waypoints(
+                    _claude, start_lat, start_lng, start_region, prefs,
+                    previous_issues=last_issues,
+                    route_summary=route_summary,
+                )
+            else:
+                # Early retries: adjust existing waypoints using route context.
+                selected = await _fix_waypoints(
+                    _claude, selected, last_issues, prefs,
+                    route_summary=route_summary,
+                )
 
     if directions_result is None:
         raise RuntimeError("Directions API returned no result after retries.")
 
-    # Step 8: Narrative.
+    # Step 5: Narrative.
     narrative = await _generate_narrative(_claude, directions_result, prefs)
 
-    # Step 9: Street View images.
-    api_key = os.environ["GOOGLE_MAPS_API_KEY"]
+    # Step 6: Street View images.
     # Use detailed step-level polylines for accurate road-following rendering.
     # The overview_polyline is too simplified and cuts through fields/water.
     encoded_polyline = _build_detailed_polyline(directions_result)
@@ -249,202 +245,145 @@ async def _geocode(
     return float(loc["lat"]), float(loc["lng"])
 
 
-# ---------------------------------------------------------------------------
-# Step 2: Candidate waypoints
-# ---------------------------------------------------------------------------
+def _reverse_geocode_region(
+    maps_client: googlemaps.Client, lat: float, lng: float
+) -> str:
+    """Returns a human-readable region string for the given coordinates.
 
-
-def _build_candidate_waypoints(
-    start_lat: float,
-    start_lng: float,
-    distance_km: int,
-    loop: bool,
-) -> list[tuple[float, float]]:
-    """Generates candidate waypoints spread around the start point.
-
-    For a loop: 6 points around a circle with ±20% jitter on the radius.
-    For one-way: 4 points spread forward in a 60° arc.
-
-    The radius is sized so that traversing the perimeter approximates the
-    requested distance.
+    Used to give Claude geographic context (e.g. "Almere, Flevoland, Netherlands")
+    so it can reason about water bodies, cities, and road networks in the area.
+    Returns a best-effort string; falls back to "lat,lng" on failure.
     """
-    # Earth's radius in km used for lat/lng offsets.
-    earth_r = 6371.0
-
-    if loop:
-        # Circumference ≈ distance_km → radius = distance / (2π)
-        base_radius_km = distance_km / (2 * math.pi)
-        points = []
-        for i in range(LOOP_CANDIDATE_COUNT):
-            angle_deg = (360 / LOOP_CANDIDATE_COUNT) * i
-            angle_rad = math.radians(angle_deg)
-            jitter = random.uniform(  # noqa: S311
-                1.0 - WAYPOINT_JITTER, 1.0 + WAYPOINT_JITTER
-            )
-            r = base_radius_km * jitter
-            dlat = r / earth_r * (180 / math.pi)
-            dlng = (r / earth_r) * (180 / math.pi) / math.cos(
-                math.radians(start_lat)
-            )
-            lat = start_lat + dlat * math.sin(angle_rad)
-            lng = start_lng + dlng * math.cos(angle_rad)
-            points.append((round(lat, 5), round(lng, 5)))
-        return points
-    else:
-        # One-way: 4 waypoints projected forward (bearing 0–60° arc spread).
-        base_radius_km = distance_km / 4
-        points = []
-        for i in range(ONEWAY_CANDIDATE_COUNT):
-            bearing_deg = -30 + (20 * i)  # spread from -30° to +30°
-            bearing_rad = math.radians(bearing_deg)
-            r = base_radius_km * (i + 1)
-            dlat = r / earth_r * (180 / math.pi)
-            dlng = (r / earth_r) * (180 / math.pi) / math.cos(
-                math.radians(start_lat)
-            )
-            lat = start_lat + dlat * math.cos(bearing_rad)
-            lng = start_lng + dlng * math.sin(bearing_rad)
-            points.append((round(lat, 5), round(lng, 5)))
-        return points
+    try:
+        results = maps_client.reverse_geocode((lat, lng))
+        if results:
+            return results[0].get("formatted_address", f"{lat},{lng}")
+    except Exception:  # noqa: BLE001
+        pass
+    return f"{lat},{lng}"
 
 
 # ---------------------------------------------------------------------------
-# Step 3: Elevation
+# Step 2: Claude-based waypoint generation
 # ---------------------------------------------------------------------------
 
+_WAYPOINT_GENERATION_PROMPT = """\
+You are planning a motorcycle route.
 
-async def _get_elevations(
-    maps_client: googlemaps.Client,
-    candidates: list[tuple[float, float]],
-) -> list[float]:
-    """Returns elevation in metres for each candidate waypoint."""
-    locations = [{"lat": lat, "lng": lng} for lat, lng in candidates]
-    result = maps_client.elevation(locations)
-    return [r.get("elevation", 0.0) for r in result]
+Start location: {start_region} (coordinates: {start_lat}, {start_lng})
 
-
-# ---------------------------------------------------------------------------
-# Step 4: Scenery scoring
-# ---------------------------------------------------------------------------
-
-_SCENERY_KEYWORDS: dict[str, list[str]] = {
-    "forests": ["forest", "woodland", "nature reserve", "national park"],
-    "coastline": ["beach", "coast", "harbour", "cliff", "sea"],
-    "mountains": ["mountain", "peak", "pass", "ridge", "fell"],
-    "mixed": ["park", "forest", "lake", "river", "nature"],
-}
-
-
-async def _score_scenery(
-    maps_client: googlemaps.Client,
-    candidates: list[tuple[float, float]],
-    scenery_type: str,
-) -> list[float]:
-    """Returns a 0–1 scenery score for each candidate based on nearby places."""
-    keywords = _SCENERY_KEYWORDS.get(scenery_type, _SCENERY_KEYWORDS["mixed"])
-    scores: list[float] = []
-    for lat, lng in candidates:
-        found = 0
-        for keyword in keywords[:SCENERY_KEYWORDS_USED]:
-            try:
-                result = maps_client.places_nearby(
-                    location=(lat, lng),
-                    radius=SCENERY_SEARCH_RADIUS_M,
-                    keyword=keyword,
-                    type="natural_feature",
-                )
-                found += len(result.get("results", []))
-            except Exception:  # noqa: BLE001
-                pass
-        scores.append(min(1.0, found / SCENERY_SATURATION))
-    return scores
-
-
-# ---------------------------------------------------------------------------
-# Step 5: LLM waypoint selection
-# ---------------------------------------------------------------------------
-
-_WAYPOINT_SELECTION_PROMPT = """\
-You are planning a motorcycle route for a rider who wants:
+Route requirements:
 - Distance: approximately {distance_km} km
-- Curviness preference: {curviness}/5 (1=relaxed, 5=maximum twisties)
+- Curviness preference: {curviness}/5 (1=relaxed straight roads, 5=maximum twisties)
 - Scenery type: {scenery_type}
 - Route type: {route_type}
 
-Here are {n} candidate waypoints with their scores:
-{waypoint_data}
+Generate exactly {n_waypoints} intermediate waypoints for this route, in riding \
+order. The route will start and {loop_description} the start coordinates — do \
+NOT include the start/end point in your waypoints.
 
-Select the best {n_select} waypoints and return them in riding order as a JSON
-array of objects: [{{"lat": ..., "lng": ...}}, ...]
-
-Rules:
-- Favour waypoints with high scenery scores when curviness preference is low
-- Favour waypoints with varied elevation when curviness preference is high
-- Ensure the selected waypoints create a coherent geographic path
-- For a loop, the last waypoint should bring the rider back toward the start
-- IMPORTANT: Avoid placing waypoints in or near major city centres, town centres,
-  or dense urban areas. Prefer waypoints on rural roads, country lanes, or suburban
-  outskirts. Motorcyclists want open roads, not traffic lights.
-- Ensure consecutive waypoints can be connected by rural or secondary roads
-  without needing to cross major water bodies (lakes, bays, estuaries). If water
-  lies between two candidates, skip them — do not create spurs to dead-end shores.
-- Think about the ROUTE BETWEEN waypoints, not just the waypoints themselves.
-  Avoid selecting waypoints that would force the routing through urban corridors,
-  ring roads, or city centres to connect them.
-- Prefer waypoints that create a flowing circuit with no spurs. Do not place
-  waypoints on peninsulas, cul-de-sac roads, or dead-end coastal/lakeside roads
-  that would require backtracking.
-- Return ONLY the JSON array, no other text
+CRITICAL RULES:
+1. Every waypoint MUST be on or within 100m of a real, paved road that exists \
+in the region. Use your knowledge of actual road networks.
+2. NEVER place a waypoint in a lake, sea, river, reservoir, or any body of \
+water. Know where water bodies are in this region.
+3. NEVER place a waypoint in the centre of a city with population over 50,000. \
+Small towns and villages are fine.
+4. Consecutive waypoints must be connectable via rural or secondary roads \
+WITHOUT passing through major cities (pop > 100k) or crossing large water \
+bodies.
+5. For a loop: the waypoints should form a flowing circuit. The last waypoint \
+should naturally lead back toward the start via rural roads.
+6. For one-way: waypoints should progress steadily away from the start.
+7. Think about the ACTUAL GEOGRAPHY of the region — you know where the roads, \
+water bodies, forests, mountains, and cities are. Use that knowledge.
+8. Prefer scenic motorcycle-friendly roads: mountain passes, coastal roads, \
+forest routes, dyke roads, country lanes, secondary highways.
+9. Think about the ROUTE BETWEEN waypoints — the road that connects them \
+matters as much as the waypoints themselves. Avoid forcing connections through \
+urban areas.
+10. Space waypoints so the total route distance (via roads) roughly matches \
+the requested distance.
+{previous_context}
+Return ONLY a JSON array of {n_waypoints} waypoints: \
+[{{"lat": ..., "lng": ...}}, ...]
 """
 
 
-async def _select_waypoints(
+async def _generate_waypoints(
     claude_client: AsyncAnthropic,
-    candidates: list[tuple[float, float]],
-    elevations: list[float],
-    scenery_scores: list[float],
+    start_lat: float,
+    start_lng: float,
+    start_region: str,
     prefs: RoutePreferences,
+    *,
+    previous_issues: list[str] | None = None,
+    route_summary: str | None = None,
 ) -> list[tuple[float, float]]:
-    """Uses Claude to select and order the best waypoints from the candidates."""
-    waypoint_data = "\n".join(
-        f"  {i + 1}. lat={lat}, lng={lng}, elevation={elev:.0f}m, scenery={score:.2f}"
-        for i, ((lat, lng), elev, score) in enumerate(
-            zip(candidates, elevations, scenery_scores)
-        )
-    )
-    n_select = min(
-        len(candidates),
-        LOOP_WAYPOINT_SELECT if prefs.loop else ONEWAY_WAYPOINT_SELECT,
+    """Uses Claude to generate waypoints based on real geographic knowledge.
+
+    Unlike the old geometric candidate approach, Claude uses its knowledge of
+    actual road networks, water bodies, and cities to place waypoints on
+    real roads in suitable locations.
+
+    Args:
+        previous_issues: Validation issues from a previous attempt (for retries).
+        route_summary: Human-readable summary of the failed route (road names,
+            cities) so Claude can see exactly what went wrong.
+    """
+    n_waypoints = (
+        LOOP_WAYPOINT_COUNT if prefs.loop else ONEWAY_WAYPOINT_COUNT
     )
     route_type = "loop (return to start)" if prefs.loop else "one-way"
 
-    prompt = _WAYPOINT_SELECTION_PROMPT.format(
+    previous_context = ""
+    if previous_issues:
+        issues_text = "\n".join(f"  - {issue}" for issue in previous_issues)
+        previous_context = (
+            f"\nA PREVIOUS ATTEMPT at this route failed validation:\n"
+            f"{issues_text}\n"
+        )
+        if route_summary:
+            previous_context += (
+                f"\nThe failed route went through these roads/areas:\n"
+                f"{route_summary}\n"
+                f"\nGenerate COMPLETELY DIFFERENT waypoints that avoid the "
+                f"problematic areas listed above.\n"
+            )
+
+    loop_description = "return to" if prefs.loop else "end away from"
+    prompt = _WAYPOINT_GENERATION_PROMPT.format(
+        start_region=start_region,
+        start_lat=start_lat,
+        start_lng=start_lng,
         distance_km=prefs.distance_km,
         curviness=prefs.curviness,
         scenery_type=prefs.scenery_type,
         route_type=route_type,
-        n=len(candidates),
-        waypoint_data=waypoint_data,
-        n_select=n_select,
+        n_waypoints=n_waypoints,
+        loop_description=loop_description,
+        previous_context=previous_context,
     )
 
-    logger.info("Requesting waypoint selection from Claude")
+    logger.info("Requesting waypoint generation from Claude")
     response = await claude_client.messages.create(
         model=ROUTE_MODEL,
         max_tokens=512,
         messages=[{"role": "user", "content": prompt}],
     )
     raw = response.content[0].text.strip()
-    logger.info("Claude waypoint response: %s", raw[:200])
+    logger.info("Claude waypoint response: %s", raw[:300])
 
     try:
         parsed = json.loads(raw)
         if isinstance(parsed, list):
             return [(float(p["lat"]), float(p["lng"])) for p in parsed]
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        logger.warning("Could not parse Claude waypoint response; using candidates as-is")
+        logger.warning(
+            "Could not parse Claude waypoint response: %s", raw[:200]
+        )
 
-    return candidates[:n_select]
+    raise ValueError("Claude did not return valid waypoint JSON.")
 
 
 # ---------------------------------------------------------------------------
@@ -782,11 +721,48 @@ def _check_polyline_overlap(overview_polyline: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Retry: fix waypoints after validation failure
+# Retry: extract route summary + fix waypoints
 # ---------------------------------------------------------------------------
 
+
+def _extract_route_summary(directions_result: dict[str, Any] | None) -> str:
+    """Extracts a human-readable summary of the route from the Directions API.
+
+    Pulls road names and cities from step instructions so Claude can see
+    exactly where the route goes wrong (e.g. "Route passes through Amsterdam
+    via A10 ring road").
+    """
+    if not directions_result:
+        return ""
+
+    lines: list[str] = []
+    for leg_idx, leg in enumerate(directions_result.get("legs", [])):
+        start = leg.get("start_address", "unknown")
+        end = leg.get("end_address", "unknown")
+        dist = leg.get("distance", {}).get("text", "?")
+        lines.append(f"Leg {leg_idx + 1}: {start} → {end} ({dist})")
+
+        # Extract key road names from step instructions.
+        road_mentions: list[str] = []
+        for step in leg.get("steps", []):
+            instr = step.get("html_instructions", "")
+            # Strip HTML tags for readability.
+            clean = instr.replace("<b>", "").replace("</b>", "")
+            clean = clean.replace("<div>", " | ").replace("</div>", "")
+            clean = clean.replace("<wbr/>", "")
+            if clean:
+                road_mentions.append(clean)
+        # Include up to 8 steps per leg to keep the summary manageable.
+        for mention in road_mentions[:8]:
+            lines.append(f"  - {mention}")
+        if len(road_mentions) > 8:
+            lines.append(f"  ... and {len(road_mentions) - 8} more steps")
+
+    return "\n".join(lines)
+
+
 _FIX_PROMPT = """\
-The motorcycle route you selected has these issues:
+The motorcycle route you generated has these validation issues:
 {issues}
 
 Original preferences:
@@ -798,14 +774,20 @@ Original preferences:
 Current waypoints:
 {current_waypoints}
 
-Please return an adjusted set of waypoints that avoids these issues.
-- Move waypoints away from urban areas or motorways.
-- If the route doubles back or has dead-end spurs, move the offending waypoint
-  to a location on the opposite side of the circuit that connects naturally via
-  through-roads (not peninsulas or lakeside dead-ends).
-- If the route passes through city centres between waypoints, shift those
-  waypoints outward so the connecting road stays rural.
-- Keep the same waypoint count.
+The Directions API routed through these roads and areas:
+{route_summary}
+
+Based on the ACTUAL ROADS the route used (shown above), adjust the waypoints \
+to fix the issues:
+- If the route passes through a city, move the nearby waypoints so the \
+connecting road bypasses that city entirely.
+- If the route uses highways/motorways, shift waypoints to force secondary \
+road connections.
+- If the route doubles back or has dead-end spurs, move the offending waypoint \
+to a location that connects via through-roads.
+- Use your knowledge of the region's actual road network.
+- Keep the same waypoint count ({n_waypoints}).
+
 Return ONLY a JSON array: [{{"lat": ..., "lng": ...}}, ...]
 """
 
@@ -815,21 +797,33 @@ async def _fix_waypoints(
     current: list[tuple[float, float]],
     issues: list[str],
     prefs: RoutePreferences,
+    *,
+    route_summary: str = "",
 ) -> list[tuple[float, float]]:
-    """Asks Claude to adjust waypoints to resolve validation issues."""
-    wp_str = "\n".join(f"  {i + 1}. lat={lat}, lng={lng}" for i, (lat, lng) in enumerate(current))
+    """Asks Claude to adjust waypoints using actual route feedback.
+
+    Unlike the old approach which only told Claude about abstract issues,
+    this version includes the actual road names and cities the route passed
+    through so Claude can make informed geographic adjustments.
+    """
+    wp_str = "\n".join(
+        f"  {i + 1}. lat={lat}, lng={lng}"
+        for i, (lat, lng) in enumerate(current)
+    )
     prompt = _FIX_PROMPT.format(
-        issues="\n".join(f"- {i}" for i in issues),
+        issues="\n".join(f"- {issue}" for issue in issues),
         distance_km=prefs.distance_km,
         curviness=prefs.curviness,
         scenery_type=prefs.scenery_type,
         route_type="loop" if prefs.loop else "one-way",
         current_waypoints=wp_str,
+        route_summary=route_summary or "(no route details available)",
+        n_waypoints=len(current),
     )
 
     response = await claude_client.messages.create(
         model=ROUTE_MODEL,
-        max_tokens=256,
+        max_tokens=512,
         messages=[{"role": "user", "content": prompt}],
     )
     raw = response.content[0].text.strip()
