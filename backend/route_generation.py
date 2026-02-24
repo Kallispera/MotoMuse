@@ -184,7 +184,9 @@ async def generate(
 
     # Step 9: Street View images.
     api_key = os.environ["GOOGLE_MAPS_API_KEY"]
-    encoded_polyline = directions_result["overview_polyline"]["points"]
+    # Use detailed step-level polylines for accurate road-following rendering.
+    # The overview_polyline is too simplified and cuts through fields/water.
+    encoded_polyline = _build_detailed_polyline(directions_result)
     street_view_urls = _get_street_view_urls(
         directions_result.get("key_waypoints", selected[:3]),
         api_key,
@@ -672,6 +674,62 @@ def _decode_polyline(encoded: str) -> list[tuple[float, float]]:
         result.append((lat / 1e5, lng / 1e5))
 
     return result
+
+
+def _encode_polyline(coordinates: list[tuple[float, float]]) -> str:
+    """Encodes a list of (lat, lng) tuples into a Google-encoded polyline."""
+    encoded: list[str] = []
+    prev_lat = 0
+    prev_lng = 0
+
+    for lat, lng in coordinates:
+        lat_e5 = round(lat * 1e5)
+        lng_e5 = round(lng * 1e5)
+
+        for delta in (lat_e5 - prev_lat, lng_e5 - prev_lng):
+            value = ~(delta << 1) if delta < 0 else (delta << 1)
+            while value >= 0x20:
+                encoded.append(chr((0x20 | (value & 0x1F)) + 63))
+                value >>= 5
+            encoded.append(chr(value + 63))
+
+        prev_lat = lat_e5
+        prev_lng = lng_e5
+
+    return "".join(encoded)
+
+
+def _build_detailed_polyline(directions_result: dict[str, Any]) -> str:
+    """Builds a high-resolution encoded polyline from step-level polylines.
+
+    The Directions API overview_polyline is heavily simplified and can cut
+    through fields, water, and buildings. Each step has its own polyline that
+    follows the actual road geometry. This function decodes all step polylines,
+    concatenates the points (removing duplicates at step boundaries), and
+    re-encodes the result.
+
+    Falls back to the overview_polyline if no step polylines are available.
+    """
+    all_points: list[tuple[float, float]] = []
+    for leg in directions_result.get("legs", []):
+        for step in leg.get("steps", []):
+            step_encoded = step.get("polyline", {}).get("points", "")
+            if not step_encoded:
+                continue
+            step_points = _decode_polyline(step_encoded)
+            if not step_points:
+                continue
+            # Skip the first point if it duplicates the last point we added
+            # (step boundaries share endpoints).
+            if all_points and step_points[0] == all_points[-1]:
+                step_points = step_points[1:]
+            all_points.extend(step_points)
+
+    if all_points:
+        return _encode_polyline(all_points)
+
+    # Fallback to overview_polyline if step polylines are missing.
+    return directions_result.get("overview_polyline", {}).get("points", "")
 
 
 def _check_polyline_overlap(overview_polyline: str) -> list[str]:

@@ -11,7 +11,38 @@ import route_generation
 from models import RoutePreferences
 
 # ---------------------------------------------------------------------------
-# Fixtures and helpers
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _encode_polyline(coordinates: list[tuple[float, float]]) -> str:
+    """Encodes a list of (lat, lng) tuples into a Google-encoded polyline.
+
+    Inverse of _decode_polyline — used in tests to build fixtures.
+    """
+    encoded = []
+    prev_lat = 0
+    prev_lng = 0
+
+    for lat, lng in coordinates:
+        lat_e5 = round(lat * 1e5)
+        lng_e5 = round(lng * 1e5)
+
+        for delta in (lat_e5 - prev_lat, lng_e5 - prev_lng):
+            value = ~(delta << 1) if delta < 0 else (delta << 1)
+            while value >= 0x20:
+                encoded.append(chr((0x20 | (value & 0x1F)) + 63))
+                value >>= 5
+            encoded.append(chr(value + 63))
+
+        prev_lat = lat_e5
+        prev_lng = lng_e5
+
+    return "".join(encoded)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
 # ---------------------------------------------------------------------------
 
 _PREFS = RoutePreferences(
@@ -48,6 +79,9 @@ def _make_directions_result(distance_m=150000, duration_s=5400):
                             "html_instructions": "Head north on some road",
                             "start_location": {"lat": 51.5074, "lng": -0.1278},
                             "end_location": {"lat": 51.55, "lng": -0.13},
+                            "polyline": {"points": _encode_polyline(
+                                [(51.5074, -0.1278), (51.52, -0.129), (51.55, -0.13)]
+                            )},
                         },
                         {
                             "distance": {"value": 145000},
@@ -55,6 +89,9 @@ def _make_directions_result(distance_m=150000, duration_s=5400):
                             "html_instructions": "Continue on scenic road",
                             "start_location": {"lat": 51.55, "lng": -0.13},
                             "end_location": {"lat": 51.8, "lng": -0.3},
+                            "polyline": {"points": _encode_polyline(
+                                [(51.55, -0.13), (51.65, -0.2), (51.8, -0.3)]
+                            )},
                         },
                     ],
                 }
@@ -81,6 +118,9 @@ def _make_multi_leg_directions_result():
                             "html_instructions": "Head north on A road",
                             "start_location": {"lat": 51.5, "lng": -0.1},
                             "end_location": {"lat": 51.7, "lng": -0.2},
+                            "polyline": {"points": _encode_polyline(
+                                [(51.5, -0.1), (51.6, -0.15), (51.7, -0.2)]
+                            )},
                         },
                     ],
                 },
@@ -95,6 +135,9 @@ def _make_multi_leg_directions_result():
                             "html_instructions": "Continue on scenic road",
                             "start_location": {"lat": 51.7, "lng": -0.2},
                             "end_location": {"lat": 51.9, "lng": -0.4},
+                            "polyline": {"points": _encode_polyline(
+                                [(51.7, -0.2), (51.8, -0.3), (51.9, -0.4)]
+                            )},
                         },
                     ],
                 },
@@ -109,6 +152,9 @@ def _make_multi_leg_directions_result():
                             "html_instructions": "Head south back to start",
                             "start_location": {"lat": 51.9, "lng": -0.4},
                             "end_location": {"lat": 51.5, "lng": -0.1},
+                            "polyline": {"points": _encode_polyline(
+                                [(51.9, -0.4), (51.7, -0.25), (51.5, -0.1)]
+                            )},
                         },
                     ],
                 },
@@ -602,37 +648,6 @@ def test_waypoint_prompt_includes_urban_avoidance():
 
 
 # ---------------------------------------------------------------------------
-# Helper: simple polyline encoder for building test fixtures
-# ---------------------------------------------------------------------------
-
-
-def _encode_polyline(coordinates: list[tuple[float, float]]) -> str:
-    """Encodes a list of (lat, lng) tuples into a Google-encoded polyline.
-
-    Inverse of _decode_polyline — used only in tests to build fixtures.
-    """
-    encoded = []
-    prev_lat = 0
-    prev_lng = 0
-
-    for lat, lng in coordinates:
-        lat_e5 = round(lat * 1e5)
-        lng_e5 = round(lng * 1e5)
-
-        for delta in (lat_e5 - prev_lat, lng_e5 - prev_lng):
-            value = ~(delta << 1) if delta < 0 else (delta << 1)
-            while value >= 0x20:
-                encoded.append(chr((0x20 | (value & 0x1F)) + 63))
-                value >>= 5
-            encoded.append(chr(value + 63))
-
-        prev_lat = lat_e5
-        prev_lng = lng_e5
-
-    return "".join(encoded)
-
-
-# ---------------------------------------------------------------------------
 # Unit tests: _decode_polyline
 # ---------------------------------------------------------------------------
 
@@ -858,3 +873,66 @@ def test_fix_prompt_includes_dead_end_guidance():
     assert "dead-end" in prompt.lower()
     assert "urban" in prompt.lower()
     assert "peninsula" in prompt.lower() or "spur" in prompt.lower()
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _build_detailed_polyline
+# ---------------------------------------------------------------------------
+
+
+def test_build_detailed_polyline_uses_step_polylines():
+    """Should concatenate step-level polylines instead of using overview."""
+    result = _make_directions_result()
+    detailed = route_generation._build_detailed_polyline(result[0])
+    # Should NOT be the overview_polyline.
+    assert detailed != result[0]["overview_polyline"]["points"]
+    # Decode and verify it has more points (step-level are more detailed).
+    points = route_generation._decode_polyline(detailed)
+    # We encoded 3 points per step × 2 steps = 6 points, minus 1 shared = 5.
+    assert len(points) == 5
+
+
+def test_build_detailed_polyline_deduplicates_step_boundaries():
+    """Shared endpoints between steps should not be duplicated."""
+    # Step 1 ends at (51.55, -0.13), step 2 starts at (51.55, -0.13).
+    result = _make_directions_result()
+    detailed = route_generation._build_detailed_polyline(result[0])
+    points = route_generation._decode_polyline(detailed)
+    # Check no consecutive duplicate points.
+    for i in range(1, len(points)):
+        assert points[i] != points[i - 1], f"Duplicate at index {i}"
+
+
+def test_build_detailed_polyline_multi_leg():
+    """Should work across multiple legs."""
+    result = _make_multi_leg_directions_result()
+    detailed = route_generation._build_detailed_polyline(result[0])
+    points = route_generation._decode_polyline(detailed)
+    # 3 legs × 3 points per step, minus 2 shared boundaries = 7 points.
+    assert len(points) == 7
+
+
+def test_build_detailed_polyline_falls_back_to_overview():
+    """Should use overview_polyline if no step polylines exist."""
+    result = _make_directions_result()
+    # Remove all step-level polylines.
+    for step in result[0]["legs"][0]["steps"]:
+        del step["polyline"]
+    detailed = route_generation._build_detailed_polyline(result[0])
+    assert detailed == result[0]["overview_polyline"]["points"]
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _encode_polyline (in route_generation module)
+# ---------------------------------------------------------------------------
+
+
+def test_encode_polyline_roundtrip():
+    """Encode then decode should return original coordinates."""
+    original = [(51.5, -0.1), (51.6, -0.2), (51.7, -0.3)]
+    encoded = route_generation._encode_polyline(original)
+    decoded = route_generation._decode_polyline(encoded)
+    assert len(decoded) == len(original)
+    for (olat, olng), (dlat, dlng) in zip(original, decoded):
+        assert abs(olat - dlat) < 0.00002
+        assert abs(olng - dlng) < 0.00002
