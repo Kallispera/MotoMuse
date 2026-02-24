@@ -255,8 +255,10 @@ class _MockClaudeClient:
 
     def __init__(self, waypoint_response=None, narrative_response=None):
         # Default waypoint response: valid JSON array of 5 waypoints (loop).
+        # NOTE: The leading "[" is omitted because the code prepends it via
+        # the assistant prefill pattern (raw = "[" + response.text).
         self._waypoint_json = waypoint_response or (
-            '[{"lat": 51.6, "lng": -0.2}, '
+            '{"lat": 51.6, "lng": -0.2}, '
             '{"lat": 51.7, "lng": -0.3}, '
             '{"lat": 51.8, "lng": -0.4}, '
             '{"lat": 51.75, "lng": -0.35}, '
@@ -369,7 +371,7 @@ async def test_generate_waypoints_returns_parsed_coordinates():
     """Claude's JSON response should be parsed into (lat, lng) tuples."""
     claude = _MockClaudeClient(
         waypoint_response=(
-            '[{"lat": 52.0, "lng": 5.0}, '
+            '{"lat": 52.0, "lng": 5.0}, '
             '{"lat": 52.1, "lng": 5.1}, '
             '{"lat": 52.2, "lng": 5.2}, '
             '{"lat": 52.15, "lng": 5.15}, '
@@ -406,7 +408,7 @@ async def test_generate_waypoints_includes_previous_context():
                 class _Response:
                     class _Content:
                         text = (
-                            '[{"lat": 52.0, "lng": 5.0}, '
+                            '{"lat": 52.0, "lng": 5.0}, '
                             '{"lat": 52.1, "lng": 5.1}, '
                             '{"lat": 52.2, "lng": 5.2}, '
                             '{"lat": 52.15, "lng": 5.15}, '
@@ -569,7 +571,7 @@ async def test_generate_one_way_route():
     )
     claude = _MockClaudeClient(
         waypoint_response=(
-            '[{"lat": 51.6, "lng": -0.2}, '
+            '{"lat": 51.6, "lng": -0.2}, '
             '{"lat": 51.7, "lng": -0.3}, '
             '{"lat": 51.8, "lng": -0.4}, '
             '{"lat": 51.85, "lng": -0.45}]'

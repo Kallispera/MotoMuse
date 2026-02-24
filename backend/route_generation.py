@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import os
+import re
 from typing import Any
 
 import googlemaps
@@ -77,6 +78,13 @@ STREET_VIEW_IMAGE_COUNT: int = 3    # images shown on the route preview screen
 STREET_VIEW_SIZE: str = "400x240"   # pixel dimensions (width x height)
 STREET_VIEW_FOV: int = 90           # horizontal field of view in degrees
 STREET_VIEW_PITCH: int = 10         # camera tilt above horizon in degrees
+
+# System prompt to force JSON-only responses from Claude.
+_JSON_SYSTEM_PROMPT = (
+    "You are a geographic route planning API. You respond with ONLY valid JSON "
+    "— no markdown, no explanation, no thinking, no commentary. Your entire "
+    "response must be a single JSON array."
+)
 
 # Internal
 _STREETVIEW_BASE = "https://maps.googleapis.com/maps/api/streetview"
@@ -310,6 +318,34 @@ Return ONLY a JSON array of {n_waypoints} waypoints: \
 """
 
 
+def _extract_json_array(text: str) -> list[dict] | None:
+    """Extracts a JSON array from text that may contain extra commentary.
+
+    Claude sometimes returns reasoning text before or after the JSON.
+    This function finds and parses the first JSON array in the response.
+    """
+    # Try the whole string first (fastest path).
+    text = text.strip()
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return parsed
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Find the first [...] block in the text.
+    match = re.search(r"\[.*\]", text, re.DOTALL)
+    if match:
+        try:
+            parsed = json.loads(match.group())
+            if isinstance(parsed, list):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    return None
+
+
 async def _generate_waypoints(
     claude_client: AsyncAnthropic,
     start_lat: float,
@@ -369,19 +405,22 @@ async def _generate_waypoints(
     response = await claude_client.messages.create(
         model=ROUTE_MODEL,
         max_tokens=512,
-        messages=[{"role": "user", "content": prompt}],
+        system=_JSON_SYSTEM_PROMPT,
+        messages=[
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": "["},
+        ],
     )
-    raw = response.content[0].text.strip()
+    # Prepend the "[" we used as prefill.
+    raw = "[" + response.content[0].text.strip()
     logger.info("Claude waypoint response: %s", raw[:300])
 
-    try:
-        parsed = json.loads(raw)
-        if isinstance(parsed, list):
+    parsed = _extract_json_array(raw)
+    if parsed is not None:
+        try:
             return [(float(p["lat"]), float(p["lng"])) for p in parsed]
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        logger.warning(
-            "Could not parse Claude waypoint response: %s", raw[:200]
-        )
+        except (KeyError, TypeError, ValueError):
+            logger.warning("Waypoint JSON missing lat/lng keys: %s", raw[:200])
 
     raise ValueError("Claude did not return valid waypoint JSON.")
 
@@ -824,17 +863,22 @@ async def _fix_waypoints(
     response = await claude_client.messages.create(
         model=ROUTE_MODEL,
         max_tokens=512,
-        messages=[{"role": "user", "content": prompt}],
+        system=_JSON_SYSTEM_PROMPT,
+        messages=[
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": "["},
+        ],
     )
-    raw = response.content[0].text.strip()
+    raw = "[" + response.content[0].text.strip()
 
-    try:
-        parsed = json.loads(raw)
-        if isinstance(parsed, list) and len(parsed) == len(current):
+    parsed = _extract_json_array(raw)
+    if parsed is not None and len(parsed) == len(current):
+        try:
             return [(float(p["lat"]), float(p["lng"])) for p in parsed]
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        logger.warning("Could not parse Claude fix response; keeping current waypoints")
+        except (KeyError, TypeError, ValueError):
+            logger.warning("Fix JSON missing lat/lng keys: %s", raw[:200])
 
+    logger.warning("Could not parse Claude fix response; keeping current waypoints")
     return current
 
 
