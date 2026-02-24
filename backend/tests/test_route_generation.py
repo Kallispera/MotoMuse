@@ -255,10 +255,8 @@ class _MockClaudeClient:
 
     def __init__(self, waypoint_response=None, narrative_response=None):
         # Default waypoint response: valid JSON array of 5 waypoints (loop).
-        # NOTE: The leading "[" is omitted because the code prepends it via
-        # the assistant prefill pattern (raw = "[" + response.text).
         self._waypoint_json = waypoint_response or (
-            '{"lat": 51.6, "lng": -0.2}, '
+            '[{"lat": 51.6, "lng": -0.2}, '
             '{"lat": 51.7, "lng": -0.3}, '
             '{"lat": 51.8, "lng": -0.4}, '
             '{"lat": 51.75, "lng": -0.35}, '
@@ -371,7 +369,7 @@ async def test_generate_waypoints_returns_parsed_coordinates():
     """Claude's JSON response should be parsed into (lat, lng) tuples."""
     claude = _MockClaudeClient(
         waypoint_response=(
-            '{"lat": 52.0, "lng": 5.0}, '
+            '[{"lat": 52.0, "lng": 5.0}, '
             '{"lat": 52.1, "lng": 5.1}, '
             '{"lat": 52.2, "lng": 5.2}, '
             '{"lat": 52.15, "lng": 5.15}, '
@@ -408,7 +406,7 @@ async def test_generate_waypoints_includes_previous_context():
                 class _Response:
                     class _Content:
                         text = (
-                            '{"lat": 52.0, "lng": 5.0}, '
+                            '[{"lat": 52.0, "lng": 5.0}, '
                             '{"lat": 52.1, "lng": 5.1}, '
                             '{"lat": 52.2, "lng": 5.2}, '
                             '{"lat": 52.15, "lng": 5.15}, '
@@ -430,6 +428,34 @@ async def test_generate_waypoints_includes_previous_context():
     assert "PREVIOUS ATTEMPT" in prompt
     assert "highway" in prompt.lower()
     assert "A6" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _extract_json_array
+# ---------------------------------------------------------------------------
+
+
+def test_extract_json_array_pure_json():
+    """Should parse a clean JSON array directly."""
+    result = route_generation._extract_json_array('[{"lat": 1.0, "lng": 2.0}]')
+    assert result == [{"lat": 1.0, "lng": 2.0}]
+
+
+def test_extract_json_array_with_reasoning():
+    """Should extract JSON even when Claude includes reasoning text."""
+    text = (
+        "I need to plan a route around the Markermeer...\n\n"
+        '[{"lat": 52.0, "lng": 5.0}, {"lat": 52.1, "lng": 5.1}]'
+    )
+    result = route_generation._extract_json_array(text)
+    assert result is not None
+    assert len(result) == 2
+    assert result[0]["lat"] == 52.0
+
+
+def test_extract_json_array_returns_none_for_invalid():
+    """Should return None when no JSON array is found."""
+    assert route_generation._extract_json_array("I don't know any roads") is None
 
 
 # ---------------------------------------------------------------------------
@@ -571,7 +597,7 @@ async def test_generate_one_way_route():
     )
     claude = _MockClaudeClient(
         waypoint_response=(
-            '{"lat": 51.6, "lng": -0.2}, '
+            '[{"lat": 51.6, "lng": -0.2}, '
             '{"lat": 51.7, "lng": -0.3}, '
             '{"lat": 51.8, "lng": -0.4}, '
             '{"lat": 51.85, "lng": -0.45}]'

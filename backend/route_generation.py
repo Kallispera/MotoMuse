@@ -406,13 +406,9 @@ async def _generate_waypoints(
         model=ROUTE_MODEL,
         max_tokens=512,
         system=_JSON_SYSTEM_PROMPT,
-        messages=[
-            {"role": "user", "content": prompt},
-            {"role": "assistant", "content": "["},
-        ],
+        messages=[{"role": "user", "content": prompt}],
     )
-    # Prepend the "[" we used as prefill.
-    raw = "[" + response.content[0].text.strip()
+    raw = response.content[0].text.strip()
     logger.info("Claude waypoint response: %s", raw[:300])
 
     parsed = _extract_json_array(raw)
@@ -864,12 +860,9 @@ async def _fix_waypoints(
         model=ROUTE_MODEL,
         max_tokens=512,
         system=_JSON_SYSTEM_PROMPT,
-        messages=[
-            {"role": "user", "content": prompt},
-            {"role": "assistant", "content": "["},
-        ],
+        messages=[{"role": "user", "content": prompt}],
     )
-    raw = "[" + response.content[0].text.strip()
+    raw = response.content[0].text.strip()
 
     parsed = _extract_json_array(raw)
     if parsed is not None and len(parsed) == len(current):
