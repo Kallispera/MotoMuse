@@ -3,6 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:motomuse/features/auth/application/auth_providers.dart';
 import 'package:motomuse/features/auth/presentation/sign_in_screen.dart';
+import 'package:motomuse/features/garage/domain/bike_photo_analysis.dart';
+import 'package:motomuse/features/garage/presentation/add_bike_screen.dart';
+import 'package:motomuse/features/garage/presentation/bike_review_screen.dart';
 import 'package:motomuse/features/garage/presentation/garage_screen.dart';
 import 'package:motomuse/features/profile/presentation/profile_screen.dart';
 import 'package:motomuse/features/scout/presentation/scout_screen.dart';
@@ -15,6 +18,12 @@ abstract final class AppRoutes {
 
   /// Garage tab path.
   static const String garage = '/garage';
+
+  /// Add-bike flow path (full screen, no bottom nav).
+  static const String addBike = '/garage/add';
+
+  /// Bike review path — pass a [BikePhotoAnalysis] via GoRouter `extra`.
+  static const String bikeReview = '/garage/review';
 
   /// Scout (route builder) tab path.
   static const String scout = '/scout';
@@ -72,6 +81,20 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: AppRoutes.signIn,
         builder: (context, state) => const SignInScreen(),
       ),
+      // Full-screen routes — no bottom navigation shell.
+      GoRoute(
+        path: AppRoutes.addBike,
+        builder: (context, state) => const AddBikeScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.bikeReview,
+        builder: (context, state) {
+          final extra = state.extra;
+          if (extra is! BikePhotoAnalysis) return const AddBikeScreen();
+          return BikeReviewScreen(analysis: extra);
+        },
+      ),
+      // Shell route — wraps tab screens with the bottom navigation bar.
       ShellRoute(
         builder: (context, state, child) => AppShell(child: child),
         routes: [

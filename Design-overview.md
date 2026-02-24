@@ -44,7 +44,8 @@ The phone should not do the heavy lifting in route generation, this should be ha
 We should use Firebase services for authentication, database and storage
 
 Backend Hosting:
-  - Route generation runs on **Cloud Run** as a **Python** service (not Cloud Functions), because it requires up to 60s execution time and sufficient memory for multi-step API orchestration. Python chosen for strong Anthropic SDK and Google Maps client library support.
+  - **Bike vision service** (`backend/`): Cloud Run Python/FastAPI service, deployed now. Handles `POST /analyze-bike` — two-phase GPT-5.2 call for vision extraction + affirming message. OPENAI_API_KEY injected via Cloud Secret Manager at deploy time.
+  - **Route generation service**: Cloud Run Python (not Cloud Functions), because it requires up to 60s execution time and sufficient memory for multi-step API orchestration. Python chosen for strong Anthropic SDK and Google Maps client library support.
   - Lightweight operations (auth triggers, Firestore hooks, simple lookups) use **Cloud Functions**
   - All backend services communicate with the Flutter client via REST or Firebase Realtime listeners
 
@@ -55,7 +56,8 @@ Route generation uses a **Hybrid Approach**:
   - This approach balances cost efficiency (leveraging Google Maps' infrastructure) with intelligence (LLM enhancement)
 
 LLM Cost Controls:
-  - Use **Claude Haiku** for the validation/vetting layer (fast, cheap)
+  - Use **GPT-5.2** (OpenAI) for the Garage vision phase: two-phase call per bike upload (vision extraction + affirming message). Estimated ~$0.01–$0.03 per upload.
+  - Use **Claude Haiku** for the route validation/vetting layer (fast, cheap)
   - Use **Claude Sonnet** for route generation, descriptions, and voiceover content (higher quality)
   - Estimated cost per route generation: ~$0.02–$0.05 all-in
   - Cache generated routes by a hash of (start region + user preferences) for 24 hours to avoid redundant generation
@@ -159,11 +161,18 @@ Phase 1: Foundation (✅ Complete)
   - Setup Cloud Run service skeleton for backend (next step)
   - Success: User can log in and see a blank "Garage" ✅
 
-Phase 2: The "Garage" & Vision
-  - Implement Image Picker
-  - Connect to Claude Vision API to identify bike specs from photos
-  - Display recognition results in editable confirmation fields; save confirmed data to Firestore
-  - Success: User uploads a photo (live or gallery), receives an affirming LLM-generated message about their motorcycle with interesting facts, and can correct/confirm the bike details
+Phase 2: The "Garage" & Vision (✅ Complete)
+  - Image picker (camera + gallery) via `image_picker ^1.1.0` ✅
+  - Photo uploaded to Firebase Storage at `bikes/{uid}/{timestamp}.jpg` ✅
+  - Cloud Run Python (FastAPI) service added at `backend/` — receives the Storage download URL and performs a two-phase GPT-5.2 call: ✅
+      Phase 1 (vision): extracts make, model, year, displacement, colour, trim, modifications, category, and distinctive features from the photo as structured JSON
+      Phase 2 (text): generates a personalised 2–3 sentence affirming message about the specific bike, drawing on its history, engineering, and culture
+  - AI model used: GPT-5.2 (OpenAI) for both vision extraction and message generation; model constant `VISION_MODEL = "gpt-5.2"` in `backend/bike_vision.py`
+  - LLM cost estimate: ~$0.01–$0.03 per bike upload (vision call + text call)
+  - BikeReviewScreen: affirming message displayed in a gold-accented card; all extracted fields are editable; modifications shown as deletable chips with add capability ✅
+  - Confirmed bike saved to Firestore at `users/{uid}/bikes/{bikeId}` ✅
+  - New Flutter packages: `image_picker ^1.1.0`, `firebase_storage ^12.0.0`, `http ^1.2.0` ✅
+  - Success: User uploads a photo (live or gallery), receives an affirming LLM-generated message about their motorcycle with interesting details, and can correct/confirm the bike details ✅
 
 Phase 3: The Route Architect
   - Implement the full route generation data flow on Cloud Run (geocoding → segment scoring → LLM waypoint selection → Directions API → validation loop)
