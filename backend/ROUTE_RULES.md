@@ -72,6 +72,12 @@ picks and orders the best ones. The selection prompt is in the
 - When curviness is high → favour varied elevation (twisty terrain)
 - Waypoints must form a coherent geographic path, not random jumps
 - For a loop, the last waypoint should arc back toward the start
+- Avoid placing waypoints in or near major city centres or dense urban areas;
+  prefer rural roads, country lanes, or suburban outskirts
+- Ensure consecutive waypoints can be connected by rural roads without crossing
+  major water bodies
+- Think about the route between waypoints: avoid urban corridors connecting them
+- Prefer waypoints that create a flowing circuit with no dead-end spurs
 
 ---
 
@@ -93,7 +99,28 @@ the waypoints and the Directions call is retried.
 | `UTURN_BEARING_CHANGE` | `150` | Bearing change in degrees that counts as a U-turn. 180° is a perfect reversal; 150° catches near-U-turns too. Reduce to ~130 for stricter detection. |
 
 **Current `HIGHWAY_STEP_KEYWORDS`:**
-`motorway`, `highway`, `freeway`, `m1`, `m20`, `m25`
+`motorway`, `highway`, `freeway`, `m1`, `m20`, `m25`, `a1`, `a2`, `a4`, `a6`, `a7`, `a9`, `a10`, `a27`, `a28`
+
+**Polyline overlap detection (large-scale double-backs):** In addition to the
+micro U-turn check, the validator decodes the overview polyline, samples
+points at regular intervals, and flags routes where too many non-adjacent
+samples are geographically close (indicating the route retraces itself).
+
+| Constant | Default | What it does |
+|---|---|---|
+| `OVERLAP_SAMPLE_INTERVAL_M` | `500` | Distance between sampled polyline points in metres. Lower = more precise but slower. |
+| `OVERLAP_PROXIMITY_THRESHOLD_M` | `150` | Two sampled points closer than this are considered overlapping. |
+| `OVERLAP_MIN_INDEX_GAP` | `5` | Minimum index distance between samples before they count as "non-adjacent". Prevents flagging nearby points on the same stretch. |
+| `OVERLAP_FRACTION_LIMIT` | `0.05` | Fail the route if more than 5% of sampled points overlap with non-adjacent points. Lower = stricter. |
+
+**Urban density detection:** Routes that pass through cities produce many short
+navigation steps with frequent turns. The validator counts steps shorter than a
+threshold and flags the route if the fraction is too high.
+
+| Constant | Default | What it does |
+|---|---|---|
+| `URBAN_SHORT_STEP_THRESHOLD_M` | `300` | Steps shorter than this distance (in metres) are classified as "urban-style". |
+| `URBAN_SHORT_STEP_FRACTION_LIMIT` | `0.30` | Fail the route if more than 30% of all steps are urban-style short steps. |
 
 ---
 
@@ -111,8 +138,10 @@ reduce cost and latency at the expense of quality.
 
 ## Step 8 — Street View images
 
-Three static Street View images are fetched at key points along the route
-(first step, midpoint, last step) and shown on the route preview screen.
+Three static Street View images are fetched at the Claude-selected scenic
+waypoints (evenly spaced) and shown on the route preview screen. A `heading`
+parameter is computed from the route polyline bearing at each point so the
+camera faces along the road direction.
 
 | Constant | Default | What it does |
 |---|---|---|
@@ -132,5 +161,7 @@ Three static Street View images are fetched at key points along the route
 | Faster generation (less cost) | Lower `LOOP_CANDIDATE_COUNT` / `ONEWAY_CANDIDATE_COUNT`, lower `MAX_ROUTE_ATTEMPTS`, lower `SCENERY_KEYWORDS_USED` |
 | Better scenery matching | Increase `SCENERY_SEARCH_RADIUS_M`, increase `SCENERY_KEYWORDS_USED` |
 | More waypoints per route | Increase `LOOP_WAYPOINT_SELECT` / `ONEWAY_WAYPOINT_SELECT` |
+| Stricter about double-backs | Lower `OVERLAP_FRACTION_LIMIT`, lower `OVERLAP_PROXIMITY_THRESHOLD_M` |
+| Stricter about urban routing | Lower `URBAN_SHORT_STEP_FRACTION_LIMIT`, lower `URBAN_SHORT_STEP_THRESHOLD_M` |
 | Different narrative style | Edit `_NARRATIVE_PROMPT` in `route_generation.py` |
 | Add a new scenery type | Add entry to `_SCENERY_KEYWORDS` dict + Flutter `_ScenerySelector` |

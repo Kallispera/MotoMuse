@@ -64,6 +64,105 @@ def _make_directions_result(distance_m=150000, duration_s=5400):
     ]
 
 
+def _make_multi_leg_directions_result():
+    """Returns a Directions API result with 3 legs (simulating 2 waypoints)."""
+    return [
+        {
+            "overview_polyline": {"points": "_p~iF~ps|U_ulLnnqC_mqNvxq`@"},
+            "legs": [
+                {
+                    "distance": {"value": 24000, "text": "24 km"},
+                    "duration": {"value": 1440, "text": "24 mins"},
+                    "start_address": "London, UK",
+                    "steps": [
+                        {
+                            "distance": {"value": 24000},
+                            "duration": {"value": 1440},
+                            "html_instructions": "Head north on A road",
+                            "start_location": {"lat": 51.5, "lng": -0.1},
+                            "end_location": {"lat": 51.7, "lng": -0.2},
+                        },
+                    ],
+                },
+                {
+                    "distance": {"value": 38000, "text": "38 km"},
+                    "duration": {"value": 2280, "text": "38 mins"},
+                    "start_address": "Some Town",
+                    "steps": [
+                        {
+                            "distance": {"value": 38000},
+                            "duration": {"value": 2280},
+                            "html_instructions": "Continue on scenic road",
+                            "start_location": {"lat": 51.7, "lng": -0.2},
+                            "end_location": {"lat": 51.9, "lng": -0.4},
+                        },
+                    ],
+                },
+                {
+                    "distance": {"value": 38000, "text": "38 km"},
+                    "duration": {"value": 2280, "text": "38 mins"},
+                    "start_address": "Another Town",
+                    "steps": [
+                        {
+                            "distance": {"value": 38000},
+                            "duration": {"value": 2280},
+                            "html_instructions": "Head south back to start",
+                            "start_location": {"lat": 51.9, "lng": -0.4},
+                            "end_location": {"lat": 51.5, "lng": -0.1},
+                        },
+                    ],
+                },
+            ],
+            "key_waypoints": [(51.7, -0.2), (51.9, -0.4), (51.5, -0.1)],
+        }
+    ]
+
+
+def _make_urban_directions_result(n_short=15, n_long=5):
+    """Returns a Directions result with many short (urban) steps.
+
+    Args:
+        n_short: Number of steps shorter than URBAN_SHORT_STEP_THRESHOLD_M.
+        n_long: Number of steps longer than the threshold.
+    """
+    short_steps = [
+        {
+            "distance": {"value": 150},
+            "duration": {"value": 20},
+            "html_instructions": f"Turn left onto city street {i}",
+            "start_location": {"lat": 52.37 + i * 0.001, "lng": 4.89},
+            "end_location": {"lat": 52.37 + (i + 1) * 0.001, "lng": 4.89},
+        }
+        for i in range(n_short)
+    ]
+    long_steps = [
+        {
+            "distance": {"value": 5000},
+            "duration": {"value": 300},
+            "html_instructions": f"Continue on rural road {i}",
+            "start_location": {"lat": 52.5 + i * 0.01, "lng": 4.89},
+            "end_location": {"lat": 52.5 + (i + 1) * 0.01, "lng": 4.89},
+        }
+        for i in range(n_long)
+    ]
+    all_steps = short_steps + long_steps
+    total_distance = sum(s["distance"]["value"] for s in all_steps)
+    total_duration = sum(s["duration"]["value"] for s in all_steps)
+    return [
+        {
+            "overview_polyline": {"points": "_p~iF~ps|U_ulLnnqC_mqNvxq`@"},
+            "legs": [
+                {
+                    "distance": {"value": total_distance, "text": f"{total_distance}m"},
+                    "duration": {"value": total_duration, "text": f"{total_duration}s"},
+                    "start_address": "Amsterdam, NL",
+                    "steps": all_steps,
+                }
+            ],
+        }
+    ]
+
+
 class _MockMapsClient:
     """Minimal mock of googlemaps.Client for testing."""
 
@@ -410,3 +509,352 @@ async def test_generate_falls_back_after_max_retries():
         claude_client=claude,
     )
     assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _sum_legs
+# ---------------------------------------------------------------------------
+
+
+def test_sum_legs_single_leg():
+    """Single-leg result should return that leg's distance and duration."""
+    result = _make_directions_result()
+    distance_km, duration_min = route_generation._sum_legs(result[0])
+    assert distance_km == 150.0
+    assert duration_min == 90
+
+
+def test_sum_legs_multi_leg():
+    """Multi-leg result should sum distance and duration across all legs."""
+    result = _make_multi_leg_directions_result()
+    distance_km, duration_min = route_generation._sum_legs(result[0])
+    # 24000 + 38000 + 38000 = 100000 m = 100.0 km
+    assert distance_km == 100.0
+    # (1440 + 2280 + 2280) // 60 = 6000 // 60 = 100 min
+    assert duration_min == 100
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _validate_route across multiple legs
+# ---------------------------------------------------------------------------
+
+
+def test_validate_route_multi_leg_passes_clean():
+    """A clean multi-leg route should pass validation."""
+    result = _make_multi_leg_directions_result()
+    issues = route_generation._validate_route(result)
+    assert issues == []
+
+
+def test_validate_route_multi_leg_flags_highway_in_later_leg():
+    """A motorway step in a later leg should still be caught."""
+    result = _make_multi_leg_directions_result()
+    # Put a motorway step in the second leg.
+    result[0]["legs"][1]["steps"] = [
+        {
+            "distance": {"value": 38000},
+            "html_instructions": "Head north on M1 motorway",
+            "start_location": {"lat": 51.7, "lng": -0.2},
+            "end_location": {"lat": 51.9, "lng": -0.4},
+        },
+    ]
+    issues = route_generation._validate_route(result)
+    assert any("highway" in i.lower() for i in issues)
+
+
+# ---------------------------------------------------------------------------
+# Integration test: multi-leg generate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_multi_leg_returns_total_distance():
+    """generate() should sum distance across all legs, not just the first."""
+    maps = _MockMapsClient(
+        directions_result=_make_multi_leg_directions_result()
+    )
+    claude = _MockClaudeClient()
+
+    result = await route_generation.generate(
+        _PREFS,
+        maps_client=maps,
+        claude_client=claude,
+    )
+
+    # Total should be 100.0 km (24+38+38), not 24.0 km (first leg only).
+    assert result.distance_km == 100.0
+    assert result.duration_min == 100
+
+
+# ---------------------------------------------------------------------------
+# Prompt content tests
+# ---------------------------------------------------------------------------
+
+
+def test_waypoint_prompt_includes_urban_avoidance():
+    """The waypoint selection prompt should instruct Claude to avoid cities."""
+    prompt = route_generation._WAYPOINT_SELECTION_PROMPT
+    assert "city centres" in prompt
+    assert "urban" in prompt.lower()
+    assert "water bodies" in prompt.lower()
+    assert "route between waypoints" in prompt.lower()
+    assert "dead-end" in prompt.lower()
+
+
+# ---------------------------------------------------------------------------
+# Helper: simple polyline encoder for building test fixtures
+# ---------------------------------------------------------------------------
+
+
+def _encode_polyline(coordinates: list[tuple[float, float]]) -> str:
+    """Encodes a list of (lat, lng) tuples into a Google-encoded polyline.
+
+    Inverse of _decode_polyline — used only in tests to build fixtures.
+    """
+    encoded = []
+    prev_lat = 0
+    prev_lng = 0
+
+    for lat, lng in coordinates:
+        lat_e5 = round(lat * 1e5)
+        lng_e5 = round(lng * 1e5)
+
+        for delta in (lat_e5 - prev_lat, lng_e5 - prev_lng):
+            value = ~(delta << 1) if delta < 0 else (delta << 1)
+            while value >= 0x20:
+                encoded.append(chr((0x20 | (value & 0x1F)) + 63))
+                value >>= 5
+            encoded.append(chr(value + 63))
+
+        prev_lat = lat_e5
+        prev_lng = lng_e5
+
+    return "".join(encoded)
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _decode_polyline
+# ---------------------------------------------------------------------------
+
+
+def test_decode_polyline_known_encoding():
+    """Google's example polyline should decode to known coordinates."""
+    # Standard Google test vector.
+    points = route_generation._decode_polyline("_p~iF~ps|U_ulLnnqC_mqNvxq`@")
+    assert len(points) == 3
+    assert abs(points[0][0] - 38.5) < 0.01
+    assert abs(points[0][1] - (-120.2)) < 0.01
+    assert abs(points[1][0] - 40.7) < 0.01
+    assert abs(points[1][1] - (-120.95)) < 0.01
+    assert abs(points[2][0] - 43.252) < 0.01
+    assert abs(points[2][1] - (-126.453)) < 0.01
+
+
+def test_decode_polyline_empty_string():
+    assert route_generation._decode_polyline("") == []
+
+
+def test_decode_polyline_roundtrip():
+    """Encode then decode should return original coordinates (within precision)."""
+    original = [(51.5, -0.1), (51.6, -0.2), (51.7, -0.3)]
+    encoded = _encode_polyline(original)
+    decoded = route_generation._decode_polyline(encoded)
+    assert len(decoded) == len(original)
+    for (olat, olng), (dlat, dlng) in zip(original, decoded):
+        assert abs(olat - dlat) < 0.00002
+        assert abs(olng - dlng) < 0.00002
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _haversine_m
+# ---------------------------------------------------------------------------
+
+
+def test_haversine_known_distance():
+    """London to Paris should be roughly 343 km."""
+    d = route_generation._haversine_m(51.5074, -0.1278, 48.8566, 2.3522)
+    assert abs(d - 343_000) < 5_000  # within 5 km
+
+
+def test_haversine_same_point():
+    d = route_generation._haversine_m(51.5, -0.1, 51.5, -0.1)
+    assert d == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _check_polyline_overlap
+# ---------------------------------------------------------------------------
+
+
+def test_check_polyline_overlap_clean_route():
+    """A simple loop that doesn't retrace should pass."""
+    # Create a square loop: many points going north, east, south, west.
+    points = []
+    # Go north from 51.0,0.0 to 51.5,0.0 (many steps for enough samples)
+    for i in range(100):
+        points.append((51.0 + i * 0.005, 0.0))
+    # Go east
+    for i in range(100):
+        points.append((51.5, 0.0 + i * 0.008))
+    # Go south
+    for i in range(100):
+        points.append((51.5 - i * 0.005, 0.8))
+    # Go west back to start
+    for i in range(100):
+        points.append((51.0, 0.8 - i * 0.008))
+
+    encoded = _encode_polyline(points)
+    issues = route_generation._check_polyline_overlap(encoded)
+    assert issues == []
+
+
+def test_check_polyline_overlap_detects_doubleback():
+    """A route that goes A→B and then B→A should be flagged."""
+    points = []
+    # Go north from 51.0,0.0 to 51.5,0.0
+    for i in range(200):
+        points.append((51.0 + i * 0.0025, 0.0))
+    # Come right back south
+    for i in range(200):
+        points.append((51.5 - i * 0.0025, 0.0))
+
+    encoded = _encode_polyline(points)
+    issues = route_generation._check_polyline_overlap(encoded)
+    assert len(issues) > 0
+    assert "doubles back" in issues[0].lower()
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _compute_road_heading
+# ---------------------------------------------------------------------------
+
+
+def test_compute_road_heading_northward():
+    """A polyline going due north should give heading ≈ 0°."""
+    points = [(51.0, 0.0), (51.1, 0.0), (51.2, 0.0)]
+    heading = route_generation._compute_road_heading(51.05, 0.0, points)
+    assert abs(heading) < 5 or abs(heading - 360) < 5  # ≈ 0° (north)
+
+
+def test_compute_road_heading_eastward():
+    """A polyline going due east should give heading ≈ 90°."""
+    points = [(51.0, 0.0), (51.0, 0.1), (51.0, 0.2)]
+    heading = route_generation._compute_road_heading(51.0, 0.05, points)
+    assert abs(heading - 90) < 5
+
+
+def test_compute_road_heading_empty_polyline():
+    """No polyline should return 0 (north) as fallback."""
+    assert route_generation._compute_road_heading(51.0, 0.0, []) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _get_street_view_urls with heading
+# ---------------------------------------------------------------------------
+
+
+def test_street_view_urls_include_heading():
+    """URLs should include a heading parameter when a polyline is provided."""
+    waypoints = [(51.0, 0.0), (51.1, 0.0)]
+    polyline = _encode_polyline([(51.0, 0.0), (51.05, 0.0), (51.1, 0.0)])
+    urls = route_generation._get_street_view_urls(
+        waypoints, "KEY", overview_polyline=polyline
+    )
+    assert len(urls) == 2
+    for url in urls:
+        assert "heading=" in url
+
+
+def test_street_view_urls_heading_fallback():
+    """Without a polyline, heading should default to 0."""
+    waypoints = [(51.0, 0.0)]
+    urls = route_generation._get_street_view_urls(waypoints, "KEY")
+    assert len(urls) == 1
+    assert "heading=0" in urls[0]
+
+
+@pytest.mark.asyncio
+async def test_key_waypoints_from_selected_not_steps():
+    """_build_and_validate should use input waypoints for key_waypoints."""
+    maps = _MockMapsClient()
+
+    waypoints_in = [(51.6, -0.2), (51.7, -0.3), (51.8, -0.4), (51.65, -0.35)]
+    result, issues = await route_generation._build_and_validate(
+        maps, 51.5074, -0.1278, waypoints_in, _PREFS
+    )
+    assert result is not None
+    key_wps = result["key_waypoints"]
+    # With 4 input waypoints and STREET_VIEW_IMAGE_COUNT=3,
+    # should pick 3 evenly spaced from the input list.
+    assert len(key_wps) == 3
+    # First and last should match input waypoints.
+    assert key_wps[0] == waypoints_in[0]
+    assert key_wps[-1] == waypoints_in[-1]
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: urban density detection
+# ---------------------------------------------------------------------------
+
+
+def test_validate_route_flags_urban_density():
+    """A route with >30% short steps should fail the urban density check."""
+    # 15 short steps + 5 long = 75% short — well above the 30% limit.
+    result = _make_urban_directions_result(n_short=15, n_long=5)
+    issues = route_generation._validate_route(result)
+    assert any("urban" in i.lower() for i in issues)
+
+
+def test_validate_route_passes_rural_route_urban_check():
+    """A route with mostly long steps should pass the urban density check."""
+    # 2 short steps + 18 long = 10% short — below the 30% limit.
+    result = _make_urban_directions_result(n_short=2, n_long=18)
+    issues = route_generation._validate_route(result)
+    assert not any("urban" in i.lower() for i in issues)
+
+
+def test_validate_route_urban_density_at_boundary():
+    """A route with exactly 30% short steps should pass (limit is >30%)."""
+    # 3 short + 7 long = 30% short — at the limit, not over.
+    result = _make_urban_directions_result(n_short=3, n_long=7)
+    issues = route_generation._validate_route(result)
+    assert not any("urban" in i.lower() for i in issues)
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: Dutch / European highway keywords
+# ---------------------------------------------------------------------------
+
+
+def test_validate_route_flags_dutch_motorway():
+    """Routes using Dutch A-roads (e.g. A1, A2) should be flagged as highway."""
+    result = _make_directions_result()
+    result[0]["legs"][0]["steps"] = [
+        {
+            "distance": {"value": 130000},
+            "html_instructions": "Merge onto A1 heading east",
+            "start_location": {"lat": 52.3, "lng": 4.9},
+            "end_location": {"lat": 52.3, "lng": 6.5},
+        },
+        {
+            "distance": {"value": 20000},
+            "html_instructions": "Exit onto N road",
+            "start_location": {"lat": 52.3, "lng": 6.5},
+            "end_location": {"lat": 52.4, "lng": 6.6},
+        },
+    ]
+    issues = route_generation._validate_route(result)
+    assert any("highway" in i.lower() for i in issues)
+
+
+# ---------------------------------------------------------------------------
+# Prompt content tests: fix prompt
+# ---------------------------------------------------------------------------
+
+
+def test_fix_prompt_includes_dead_end_guidance():
+    """The fix prompt should mention dead-end spurs and urban corridors."""
+    prompt = route_generation._FIX_PROMPT
+    assert "dead-end" in prompt.lower()
+    assert "urban" in prompt.lower()
+    assert "peninsula" in prompt.lower() or "spur" in prompt.lower()

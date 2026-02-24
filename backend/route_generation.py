@@ -59,12 +59,27 @@ SCENERY_SATURATION: int = 5           # result count that maps to a perfect scor
 HIGHWAY_FRACTION_LIMIT: float = 0.10
 # Step instruction keywords that indicate a motorway stretch.
 HIGHWAY_STEP_KEYWORDS: frozenset = frozenset(
-    {"motorway", "highway", "freeway", "m1", "m20", "m25"}
+    {
+        "motorway", "highway", "freeway",
+        # UK motorways
+        "m1", "m20", "m25",
+        # Dutch / European motorways (A-roads that are motorway-grade)
+        "a1", "a2", "a4", "a6", "a7", "a9", "a10", "a27", "a28",
+    }
 )
 # U-turn detection: flag when two consecutive steps are both shorter than
 # UTURN_STEP_MAX_M *and* their bearings differ by more than UTURN_BEARING_CHANGE.
 UTURN_STEP_MAX_M: int = 200
 UTURN_BEARING_CHANGE: int = 150     # degrees
+# Polyline overlap detection (large-scale double-backs).
+OVERLAP_SAMPLE_INTERVAL_M: int = 500    # sample one point every 500m
+OVERLAP_PROXIMITY_THRESHOLD_M: int = 150  # points closer than this "overlap"
+OVERLAP_MIN_INDEX_GAP: int = 5          # ignore adjacent samples
+OVERLAP_FRACTION_LIMIT: float = 0.05    # fail if >5% of sampled points overlap
+# Urban density detection — routes through cities produce many short steps
+# with frequent turns. Flag the route if too many steps are short.
+URBAN_SHORT_STEP_THRESHOLD_M: int = 300    # steps shorter than this are "urban-style"
+URBAN_SHORT_STEP_FRACTION_LIMIT: float = 0.30  # fail if >30% of steps are short
 # Maximum validation attempts before accepting the best-effort route.
 MAX_ROUTE_ATTEMPTS: int = 3
 
@@ -169,17 +184,17 @@ async def generate(
 
     # Step 9: Street View images.
     api_key = os.environ["GOOGLE_MAPS_API_KEY"]
+    encoded_polyline = directions_result["overview_polyline"]["points"]
     street_view_urls = _get_street_view_urls(
-        directions_result.get("key_waypoints", selected[:3]), api_key
+        directions_result.get("key_waypoints", selected[:3]),
+        api_key,
+        overview_polyline=encoded_polyline,
     )
 
     # Build final result.
     # directions_result is already result[0] from the Directions API response
     # (a single route dict), so index "legs" directly — not "routes"][0].
-    leg = directions_result["legs"][0]
-    distance_km = leg["distance"]["value"] / 1000
-    duration_min = leg["duration"]["value"] // 60
-    encoded_polyline = directions_result["overview_polyline"]["points"]
+    distance_km, duration_min = _sum_legs(directions_result)
 
     waypoints = [
         RouteWaypoint(lat=lat, lng=lng) for lat, lng in selected
@@ -365,6 +380,18 @@ Rules:
 - Favour waypoints with varied elevation when curviness preference is high
 - Ensure the selected waypoints create a coherent geographic path
 - For a loop, the last waypoint should bring the rider back toward the start
+- IMPORTANT: Avoid placing waypoints in or near major city centres, town centres,
+  or dense urban areas. Prefer waypoints on rural roads, country lanes, or suburban
+  outskirts. Motorcyclists want open roads, not traffic lights.
+- Ensure consecutive waypoints can be connected by rural or secondary roads
+  without needing to cross major water bodies (lakes, bays, estuaries). If water
+  lies between two candidates, skip them — do not create spurs to dead-end shores.
+- Think about the ROUTE BETWEEN waypoints, not just the waypoints themselves.
+  Avoid selecting waypoints that would force the routing through urban corridors,
+  ring roads, or city centres to connect them.
+- Prefer waypoints that create a flowing circuit with no spurs. Do not place
+  waypoints on peninsulas, cul-de-sac roads, or dead-end coastal/lakeside roads
+  that would require backtracking.
 - Return ONLY the JSON array, no other text
 """
 
@@ -461,18 +488,18 @@ async def _build_and_validate(
         return None, ["Directions API returned no routes."]
 
     issues = _validate_route(result)
-    # Attach key scenic waypoints for Street View (first, middle, last).
+    # Attach the selected scenic waypoints for Street View, evenly spaced.
     if result:
-        all_steps = result[0]["legs"][0]["steps"]
-        n = len(all_steps)
-        key_idxs = [0, n // 2, n - 1] if n >= 3 else list(range(n))
-        result[0]["key_waypoints"] = [
-            (
-                all_steps[i]["end_location"]["lat"],
-                all_steps[i]["end_location"]["lng"],
-            )
-            for i in key_idxs
-        ]
+        n = len(waypoints)
+        if n <= STREET_VIEW_IMAGE_COUNT:
+            key_wps = list(waypoints)
+        else:
+            idxs = [
+                round(i * (n - 1) / (STREET_VIEW_IMAGE_COUNT - 1))
+                for i in range(STREET_VIEW_IMAGE_COUNT)
+            ]
+            key_wps = [waypoints[i] for i in idxs]
+        result[0]["key_waypoints"] = key_wps
 
     return result[0] if result else None, issues
 
@@ -481,8 +508,10 @@ def _validate_route(result: list[dict[str, Any]]) -> list[str]:
     """Validates the Directions API result against quality rules.
 
     Checks:
-    - No obvious U-turns (bearing reversal within 200m).
     - Highway/motorway steps not exceeding 10% of total distance.
+    - No obvious U-turns (bearing reversal within short steps).
+    - Polyline overlap detection for large-scale double-backs.
+    - Urban density detection (too many short steps = city routing).
 
     Returns:
         A list of human-readable issue descriptions. Empty = valid.
@@ -492,9 +521,11 @@ def _validate_route(result: list[dict[str, Any]]) -> list[str]:
         return ["No route returned by Directions API."]
 
     route = result[0]
-    leg = route["legs"][0]
-    steps = leg["steps"]
-    total_distance = leg["distance"]["value"]
+    steps = []
+    total_distance = 0
+    for leg in route["legs"]:
+        steps.extend(leg["steps"])
+        total_distance += leg["distance"]["value"]
 
     # Check for highway-dominant stretches.
     if total_distance > 0:
@@ -536,7 +567,42 @@ def _validate_route(result: list[dict[str, Any]]) -> list[str]:
                 )
                 break  # One U-turn flag is enough to trigger retry.
 
+    # Check for large-scale double-backs via polyline overlap.
+    overview = route.get("overview_polyline", {}).get("points", "")
+    if overview:
+        issues.extend(_check_polyline_overlap(overview))
+
+    # Check for urban density: too many short steps indicate city routing.
+    if steps:
+        short_step_count = sum(
+            1 for s in steps
+            if s["distance"]["value"] < URBAN_SHORT_STEP_THRESHOLD_M
+        )
+        short_fraction = short_step_count / len(steps)
+        if short_fraction > URBAN_SHORT_STEP_FRACTION_LIMIT:
+            issues.append(
+                f"Route appears to pass through urban areas: "
+                f"{short_fraction:.0%} of steps are shorter than "
+                f"{URBAN_SHORT_STEP_THRESHOLD_M}m "
+                f"(limit: {URBAN_SHORT_STEP_FRACTION_LIMIT:.0%})."
+            )
+
     return issues
+
+
+def _sum_legs(directions_result: dict[str, Any]) -> tuple[float, int]:
+    """Sums distance (km) and duration (minutes) across all legs.
+
+    The Directions API returns one leg per segment between waypoints.
+    A route with N intermediate waypoints has N+1 legs.
+    """
+    total_distance_m = sum(
+        leg["distance"]["value"] for leg in directions_result["legs"]
+    )
+    total_duration_s = sum(
+        leg["duration"]["value"] for leg in directions_result["legs"]
+    )
+    return total_distance_m / 1000, total_duration_s // 60
 
 
 def _is_highway_step(step: dict[str, Any]) -> bool:
@@ -552,6 +618,109 @@ def _bearing(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     x = math.sin(dlng) * math.cos(lat2)
     y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlng)
     return (math.degrees(math.atan2(x, y)) + 360) % 360
+
+
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Returns the great-circle distance in metres between two points."""
+    earth_r = 6_371_000  # metres
+    lat1_r, lat2_r = math.radians(lat1), math.radians(lat2)
+    dlat = lat2_r - lat1_r
+    dlng = math.radians(lng2 - lng1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1_r) * math.cos(lat2_r) * math.sin(dlng / 2) ** 2
+    )
+    return earth_r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _decode_polyline(encoded: str) -> list[tuple[float, float]]:
+    """Decodes a Google-encoded polyline string to a list of (lat, lng) points.
+
+    Implements the standard Google polyline encoding algorithm.
+    See: https://developers.google.com/maps/documentation/utilities/polylinealgorithm
+    """
+    result: list[tuple[float, float]] = []
+    index = 0
+    lat = 0
+    lng = 0
+
+    while index < len(encoded):
+        # Decode latitude delta.
+        shift = 0
+        value = 0
+        while True:
+            b = ord(encoded[index]) - 63
+            index += 1
+            value |= (b & 0x1F) << shift
+            shift += 5
+            if b < 0x20:
+                break
+        lat += ~(value >> 1) if (value & 1) else (value >> 1)
+
+        # Decode longitude delta.
+        shift = 0
+        value = 0
+        while True:
+            b = ord(encoded[index]) - 63
+            index += 1
+            value |= (b & 0x1F) << shift
+            shift += 5
+            if b < 0x20:
+                break
+        lng += ~(value >> 1) if (value & 1) else (value >> 1)
+
+        result.append((lat / 1e5, lng / 1e5))
+
+    return result
+
+
+def _check_polyline_overlap(overview_polyline: str) -> list[str]:
+    """Detects large-scale double-backs by checking if the route overlaps itself.
+
+    Decodes the overview polyline, samples points at regular intervals, then
+    checks whether any non-adjacent sampled points are geographically close
+    (indicating the route retraces the same corridor).
+    """
+    points = _decode_polyline(overview_polyline)
+    if len(points) < 2:
+        return []
+
+    # Sample points at approximately OVERLAP_SAMPLE_INTERVAL_M intervals.
+    sampled = [points[0]]
+    accumulated_m = 0.0
+    for i in range(1, len(points)):
+        d = _haversine_m(
+            points[i - 1][0], points[i - 1][1],
+            points[i][0], points[i][1],
+        )
+        accumulated_m += d
+        if accumulated_m >= OVERLAP_SAMPLE_INTERVAL_M:
+            sampled.append(points[i])
+            accumulated_m = 0.0
+
+    if len(sampled) < OVERLAP_MIN_INDEX_GAP * 2:
+        return []  # Route too short to meaningfully check.
+
+    # Count how many sampled points are close to a non-adjacent sampled point.
+    overlap_count = 0
+    for i in range(len(sampled)):
+        for j in range(i + OVERLAP_MIN_INDEX_GAP, len(sampled)):
+            dist = _haversine_m(
+                sampled[i][0], sampled[i][1],
+                sampled[j][0], sampled[j][1],
+            )
+            if dist < OVERLAP_PROXIMITY_THRESHOLD_M:
+                overlap_count += 1
+                break  # One overlap per point is enough.
+
+    fraction = overlap_count / len(sampled) if sampled else 0
+    if fraction > OVERLAP_FRACTION_LIMIT:
+        return [
+            f"Route doubles back on itself: {fraction:.0%} of sampled points "
+            f"overlap with non-adjacent segments "
+            f"(limit: {OVERLAP_FRACTION_LIMIT:.0%})."
+        ]
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -572,7 +741,13 @@ Current waypoints:
 {current_waypoints}
 
 Please return an adjusted set of waypoints that avoids these issues.
-Move waypoints away from urban areas or motorways. Keep the same count.
+- Move waypoints away from urban areas or motorways.
+- If the route doubles back or has dead-end spurs, move the offending waypoint
+  to a location on the opposite side of the circuit that connects naturally via
+  through-roads (not peninsulas or lakeside dead-ends).
+- If the route passes through city centres between waypoints, shift those
+  waypoints outward so the connecting road stays rural.
+- Keep the same waypoint count.
 Return ONLY a JSON array: [{{"lat": ..., "lng": ...}}, ...]
 """
 
@@ -638,10 +813,10 @@ async def _generate_narrative(
     prefs: RoutePreferences,
 ) -> str:
     """Generates a route narrative using Claude Sonnet."""
-    leg = directions_result["legs"][0]
-    distance_km = leg["distance"]["value"] / 1000
-    duration_min = leg["duration"]["value"] // 60
-    start_address = leg.get("start_address", prefs.start_location)
+    distance_km, duration_min = _sum_legs(directions_result)
+    start_address = directions_result["legs"][0].get(
+        "start_address", prefs.start_location
+    )
     n_waypoints = len(directions_result.get("key_waypoints", []))
 
     prompt = _NARRATIVE_PROMPT.format(
@@ -668,19 +843,61 @@ async def _generate_narrative(
 # ---------------------------------------------------------------------------
 
 
+def _compute_road_heading(
+    lat: float,
+    lng: float,
+    polyline_points: list[tuple[float, float]],
+) -> float:
+    """Computes the road bearing at the given point using the nearest polyline segment.
+
+    Falls back to 0 (north) if no polyline is available.
+    """
+    if len(polyline_points) < 2:
+        return 0.0
+
+    # Find the nearest polyline point.
+    best_idx = 0
+    best_dist = float("inf")
+    for i, (plat, plng) in enumerate(polyline_points):
+        d = _haversine_m(lat, lng, plat, plng)
+        if d < best_dist:
+            best_dist = d
+            best_idx = i
+
+    # Use the bearing from this point to the next (or previous to this).
+    if best_idx < len(polyline_points) - 1:
+        p1 = polyline_points[best_idx]
+        p2 = polyline_points[best_idx + 1]
+    else:
+        p1 = polyline_points[best_idx - 1]
+        p2 = polyline_points[best_idx]
+
+    return _bearing(p1[0], p1[1], p2[0], p2[1])
+
+
 def _get_street_view_urls(
     waypoints: list[tuple[float, float]],
     api_key: str,
+    overview_polyline: str = "",
 ) -> list[str]:
-    """Returns Street View Static API URLs for up to 3 waypoints."""
+    """Returns Street View Static API URLs for up to 3 waypoints.
+
+    If an overview_polyline is provided, computes a heading at each waypoint
+    so the camera faces along the road direction.
+    """
+    polyline_points = (
+        _decode_polyline(overview_polyline) if overview_polyline else []
+    )
     urls = []
     for lat, lng in waypoints[:STREET_VIEW_IMAGE_COUNT]:
+        heading = _compute_road_heading(lat, lng, polyline_points)
         url = (
             f"{_STREETVIEW_BASE}"
             f"?size={STREET_VIEW_SIZE}"
             f"&location={lat},{lng}"
             f"&fov={STREET_VIEW_FOV}"
             f"&pitch={STREET_VIEW_PITCH}"
+            f"&heading={heading:.0f}"
             f"&key={api_key}"
         )
         urls.append(url)
