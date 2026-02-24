@@ -68,10 +68,15 @@ OVERLAP_FRACTION_LIMIT: float = 0.03    # fail if >3% of sampled points overlap
 # Dead-end spur detection: catch segments where the route goes out along
 # a road and comes back along the same corridor.
 SPUR_SAMPLE_INTERVAL_M: int = 200       # sample one point every 200m
-SPUR_PROXIMITY_M: int = 100             # two points this close may be a spur endpoint
+SPUR_PROXIMITY_M: int = 300             # two points this close may be a spur endpoint
 SPUR_MIN_INDEX_GAP: int = 8             # minimum samples apart to be "non-adjacent"
 SPUR_PATH_RATIO: float = 5.0            # path_distance / straight_distance threshold
 SPUR_MIN_LENGTH_M: int = 500            # ignore spurs shorter than this
+# Dead-end spur snapping — detect waypoints where the route U-turns and snap
+# them to the branch point where the spur diverges from the main route.
+UTURN_BEARING_THRESHOLD: int = 140      # bearing diff (°) to flag U-turn at waypoint
+SPUR_CORRIDOR_WIDTH_M: int = 500        # max corridor width for branch-point search
+SPUR_SNAP_MIN_LENGTH_M: int = 200       # ignore spurs shorter than this for snapping
 # Urban density detection — routes through cities produce many short steps
 # with frequent turns. Flag the route if too many steps are short.
 URBAN_SHORT_STEP_THRESHOLD_M: int = 300    # steps shorter than this are "urban-style"
@@ -478,6 +483,41 @@ async def _build_and_validate(
     if not result:
         return None, ["Directions API returned no routes."]
 
+    # --- Spur snapping: detect U-turn waypoints and snap them to branch
+    # points before running validation.  One re-request at most. ----------
+    if len(result[0].get("legs", [])) > 1:
+        new_intermediate, snapped = _snap_spur_waypoints(
+            result[0], intermediate,
+        )
+        if snapped:
+            logger.info(
+                "Spur snapping: re-requesting with %d snapped waypoint(s)",
+                len(snapped),
+            )
+            wp_strs = [f"{lat},{lng}" for lat, lng in new_intermediate]
+            try:
+                snap_result = maps_client.directions(
+                    origin=origin,
+                    destination=destination,
+                    waypoints=wp_strs,
+                    mode="driving",
+                    avoid=["highways", "tolls"],
+                    optimize_waypoints=False,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Directions API error (spur snap): %s", exc)
+                snap_result = None
+
+            if snap_result:
+                result = snap_result
+                # Update waypoints for downstream key_waypoints selection.
+                if prefs.loop:
+                    waypoints = list(new_intermediate)
+                    intermediate = waypoints
+                else:
+                    waypoints = list(new_intermediate) + [waypoints[-1]]
+                    intermediate = new_intermediate
+
     issues = _validate_route(result)
     # Attach the selected scenic waypoints for Street View, evenly spaced.
     if result:
@@ -839,6 +879,181 @@ def _check_backtrack_spurs(overview_polyline: str) -> list[str]:
                 return issues  # One spur is enough to trigger a retry.
 
     return issues
+
+
+# ---------------------------------------------------------------------------
+# Dead-end spur snapping — detect U-turn waypoints, find branch points,
+# and snap waypoints onto the main route to eliminate spurs.
+# ---------------------------------------------------------------------------
+
+
+def _decode_leg_polyline(leg: dict[str, Any]) -> list[tuple[float, float]]:
+    """Decodes all step polylines in a single leg into a point list."""
+    all_points: list[tuple[float, float]] = []
+    for step in leg.get("steps", []):
+        step_encoded = step.get("polyline", {}).get("points", "")
+        if not step_encoded:
+            continue
+        step_points = _decode_polyline(step_encoded)
+        if not step_points:
+            continue
+        if all_points and step_points[0] == all_points[-1]:
+            step_points = step_points[1:]
+        all_points.extend(step_points)
+    return all_points
+
+
+def _detect_uturn_waypoints(
+    directions_result: dict[str, Any],
+) -> list[int]:
+    """Detects waypoints where the route performs a U-turn (dead-end spur).
+
+    For a route with N intermediate waypoints there are N+1 legs.
+    Leg boundary *i* (between leg i and leg i+1) corresponds to intermediate
+    waypoint *i*.  A U-turn is detected when the approach bearing (last step
+    of leg i) and departure bearing (first step of leg i+1) differ by more
+    than ``UTURN_BEARING_THRESHOLD`` degrees.
+    """
+    legs = directions_result.get("legs", [])
+    uturn_indices: list[int] = []
+
+    for i in range(len(legs) - 1):
+        # --- approach bearing: last step of incoming leg ---
+        incoming_steps = legs[i].get("steps", [])
+        if not incoming_steps:
+            continue
+        last_step = incoming_steps[-1]
+        a_start = last_step.get("start_location", {})
+        a_end = last_step.get("end_location", {})
+        # Guard: skip degenerate zero-length steps.
+        if (
+            a_start.get("lat") == a_end.get("lat")
+            and a_start.get("lng") == a_end.get("lng")
+        ):
+            continue
+
+        # --- departure bearing: first step of outgoing leg ---
+        outgoing_steps = legs[i + 1].get("steps", [])
+        if not outgoing_steps:
+            continue
+        first_step = outgoing_steps[0]
+        d_start = first_step.get("start_location", {})
+        d_end = first_step.get("end_location", {})
+        if (
+            d_start.get("lat") == d_end.get("lat")
+            and d_start.get("lng") == d_end.get("lng")
+        ):
+            continue
+
+        approach = _bearing(
+            a_start["lat"], a_start["lng"], a_end["lat"], a_end["lng"],
+        )
+        depart = _bearing(
+            d_start["lat"], d_start["lng"], d_end["lat"], d_end["lng"],
+        )
+
+        diff = abs(approach - depart)
+        if diff > 180:
+            diff = 360 - diff
+        if diff > UTURN_BEARING_THRESHOLD:
+            uturn_indices.append(i)
+
+    return uturn_indices
+
+
+def _find_branch_point(
+    directions_result: dict[str, Any],
+    waypoint_idx: int,
+) -> tuple[float, float] | None:
+    """Finds the branch point where a dead-end spur diverges from the main route.
+
+    Decodes step-level polylines for the two legs surrounding the U-turn
+    waypoint.  Walks outward from the waypoint position along both legs
+    simultaneously.  While the two paths remain within ``SPUR_CORRIDOR_WIDTH_M``
+    of each other, we are still in the spur corridor.  The last pair of close
+    points before they diverge is the branch point.
+
+    Returns ``(lat, lng)`` of the branch point, or ``None`` if the spur is too
+    short or no clear branch point is found.
+    """
+    legs = directions_result.get("legs", [])
+    if waypoint_idx + 1 >= len(legs):
+        return None
+
+    # Decode the approach leg (ends at waypoint) and departure leg (starts at
+    # waypoint).  Reverse the approach leg so index 0 = waypoint.
+    approach_pts = _decode_leg_polyline(legs[waypoint_idx])
+    depart_pts = _decode_leg_polyline(legs[waypoint_idx + 1])
+
+    if len(approach_pts) < 2 or len(depart_pts) < 2:
+        return None
+
+    approach_rev = list(reversed(approach_pts))
+
+    last_close_a = approach_rev[0]
+    last_close_d = depart_pts[0]
+    spur_length_m = 0.0
+
+    max_steps = min(len(approach_rev), len(depart_pts))
+    for step in range(1, max_steps):
+        a_pt = approach_rev[step]
+        d_pt = depart_pts[step]
+
+        dist = _haversine_m(a_pt[0], a_pt[1], d_pt[0], d_pt[1])
+
+        if dist < SPUR_CORRIDOR_WIDTH_M:
+            # Still in the spur corridor — update branch point candidate.
+            last_close_a = a_pt
+            last_close_d = d_pt
+            # Track distance walked from the waypoint for spur length.
+            spur_length_m += _haversine_m(
+                approach_rev[step - 1][0], approach_rev[step - 1][1],
+                a_pt[0], a_pt[1],
+            )
+        else:
+            # Paths have diverged — we found the branch point.
+            break
+
+    if spur_length_m < SPUR_SNAP_MIN_LENGTH_M:
+        return None  # Spur too short; not worth snapping.
+
+    branch_lat = (last_close_a[0] + last_close_d[0]) / 2
+    branch_lng = (last_close_a[1] + last_close_d[1]) / 2
+    return (branch_lat, branch_lng)
+
+
+def _snap_spur_waypoints(
+    directions_result: dict[str, Any],
+    waypoints: list[tuple[float, float]],
+) -> tuple[list[tuple[float, float]], list[int]]:
+    """Replaces dead-end U-turn waypoints with their branch points.
+
+    Returns (new_waypoints, snapped_indices).  ``new_waypoints`` has the same
+    length as *waypoints* but with U-turn waypoints replaced by branch point
+    coordinates.  ``snapped_indices`` lists which indices were modified.
+    """
+    uturn_indices = _detect_uturn_waypoints(directions_result)
+    if not uturn_indices:
+        return list(waypoints), []
+
+    new_waypoints = list(waypoints)
+    snapped: list[int] = []
+
+    for idx in uturn_indices:
+        if idx >= len(new_waypoints):
+            continue
+        branch = _find_branch_point(directions_result, idx)
+        if branch is not None:
+            logger.info(
+                "Snapped waypoint %d from (%.4f,%.4f) to branch point (%.4f,%.4f)",
+                idx,
+                waypoints[idx][0], waypoints[idx][1],
+                branch[0], branch[1],
+            )
+            new_waypoints[idx] = branch
+            snapped.append(idx)
+
+    return new_waypoints, snapped
 
 
 # ---------------------------------------------------------------------------

@@ -112,10 +112,12 @@ Regional Riding Knowledge:
   - Regional data is maintained as a curated knowledge file (or Firestore collection) that maps country/region to notable riding areas with brief descriptors (road character, scenery type, elevation profile, best season)
 
 Each route generation must be checked for quality (validated programmatically against the route polyline):
-  - No reusing roads on the same route unless strictly necessary (detected via polyline segment overlap check)
+  - No reusing roads on the same route unless strictly necessary (detected via polyline segment overlap check, 300m sampling, 3% threshold)
   - No u-turns (detected via bearing reversal within a short distance threshold)
+  - No dead-end spurs (detected via polyline path/distance ratio; also caught by waypoint-level U-turn detection + geometric branch-point snapping before validation)
   - No 'pointless turns' and detours (detected via detour ratio: actual segment distance vs crow-flies distance)
   - Route should avoid going through large cities and long motorway stretches (enforced via road-type filtering on Directions API response)
+  - No excessive urban routing (detected via short-step fraction, 30% threshold)
 
 Each route should come with:
   - Street View imagery at scenic and curvy waypoints (via Google Street View Static API)
@@ -187,7 +189,7 @@ Phase 2: The "Garage" & Vision (✅ Complete)
 Phase 3: The Route Architect (✅ Core route generation complete)
   Phase 3a — Route generation and map display (complete):
   - Scout screen built: distance slider, curviness stars, scenery chip selector, loop/one-way toggle, lunch stop toggle, GPS start location auto-fill via geolocator ✅
-  - Cloud Run /generate-route endpoint: nine-step pipeline — geocoding → geometric candidate waypoints → Elevation API scoring → Places API scenery scoring → Claude Sonnet waypoint selection → Directions API (avoid highways/tolls) → programmatic validation (U-turns, highway %) with up to 3 LLM retry cycles → Claude narrative → Street View Static images ✅
+  - Cloud Run /generate-route endpoint: pipeline — geocoding → reverse-geocode region context → Claude Sonnet waypoint generation → Directions API (avoid highways/tolls) → waypoint spur snapping (geometric U-turn detection + branch-point snap) → programmatic validation (highways, U-turns, overlap, dead-end spurs, urban density) with up to 5 retry cycles → Claude narrative → Street View Static images with coverage verification ✅
   - Route preview screen: google_maps_flutter map with decoded polyline, Street View image horizontal scroll, route stats, LLM narrative ✅
   - New Flutter packages: geolocator ^13.0.0, google_maps_flutter ^2.9.0 ✅
   - New backend packages: googlemaps 4.10.0, anthropic 0.49.0 (Claude Sonnet for route selection and narrative) ✅

@@ -1301,3 +1301,401 @@ def test_get_street_view_urls_returns_empty_when_no_coverage(mock_get):
     waypoints = [(51.5, -0.1), (51.6, -0.2)]
     urls = route_generation._get_street_view_urls(waypoints, "KEY")
     assert urls == []
+
+
+# ---------------------------------------------------------------------------
+# Dead-end spur snapping tests
+# ---------------------------------------------------------------------------
+
+
+def _make_spur_legs_result(spur_km=1.0):
+    """Builds a 3-leg Directions result where the middle waypoint is a spur.
+
+    Leg 0: origin (51.5, -0.1) → east to waypoint-0 (51.5, 0.0)
+    Leg 1: waypoint-0 → north 1km (spur) to waypoint-1 (51.5+delta, 0.0)
+    Leg 2: waypoint-1 → south 1km (back) to branch → east to destination
+
+    The approach to waypoint-1 goes north, the departure goes south → 180°
+    bearing reversal = U-turn.
+    """
+    delta = spur_km / 111.0  # ~1 degree lat = 111 km
+    branch_lat = 51.5
+    spur_tip_lat = 51.5 + delta
+
+    # Build step polylines with many points for accurate branch-point finding.
+    approach_points = []
+    depart_points = []
+    n_pts = 40
+    for i in range(n_pts + 1):
+        frac = i / n_pts
+        approach_points.append((branch_lat + frac * delta, 0.0))
+        depart_points.append((spur_tip_lat - frac * delta, 0.0))
+
+    # After the spur, depart leg continues east.
+    east_points = [(branch_lat, 0.0)]
+    for i in range(1, 21):
+        east_points.append((branch_lat, 0.0 + i * 0.005))
+
+    return [
+        {
+            "overview_polyline": {"points": "_p~iF~ps|U_ulLnnqC"},
+            "legs": [
+                {
+                    "distance": {"value": 10000, "text": "10 km"},
+                    "duration": {"value": 600, "text": "10 mins"},
+                    "start_address": "Origin",
+                    "end_address": "Waypoint 0",
+                    "steps": [
+                        {
+                            "distance": {"value": 10000},
+                            "html_instructions": "Head east",
+                            "start_location": {"lat": 51.5, "lng": -0.1},
+                            "end_location": {"lat": 51.5, "lng": 0.0},
+                            "polyline": {"points": _encode_polyline(
+                                [(51.5, -0.1), (51.5, -0.05), (51.5, 0.0)]
+                            )},
+                        },
+                    ],
+                },
+                {
+                    "distance": {"value": int(spur_km * 1000)},
+                    "duration": {"value": 300, "text": "5 mins"},
+                    "start_address": "Waypoint 0",
+                    "end_address": "Waypoint 1 (spur tip)",
+                    "steps": [
+                        {
+                            "distance": {"value": int(spur_km * 1000)},
+                            "html_instructions": "Head north",
+                            "start_location": {"lat": branch_lat, "lng": 0.0},
+                            "end_location": {
+                                "lat": spur_tip_lat, "lng": 0.0,
+                            },
+                            "polyline": {"points": _encode_polyline(
+                                approach_points
+                            )},
+                        },
+                    ],
+                },
+                {
+                    "distance": {"value": int(spur_km * 1000) + 10000},
+                    "duration": {"value": 900, "text": "15 mins"},
+                    "start_address": "Waypoint 1 (spur tip)",
+                    "end_address": "Destination",
+                    "steps": [
+                        {
+                            "distance": {"value": int(spur_km * 1000)},
+                            "html_instructions": "Head south (spur return)",
+                            "start_location": {
+                                "lat": spur_tip_lat, "lng": 0.0,
+                            },
+                            "end_location": {
+                                "lat": branch_lat, "lng": 0.0,
+                            },
+                            "polyline": {"points": _encode_polyline(
+                                depart_points
+                            )},
+                        },
+                        {
+                            "distance": {"value": 10000},
+                            "html_instructions": "Continue east",
+                            "start_location": {
+                                "lat": branch_lat, "lng": 0.0,
+                            },
+                            "end_location": {"lat": 51.5, "lng": 0.1},
+                            "polyline": {"points": _encode_polyline(
+                                east_points
+                            )},
+                        },
+                    ],
+                },
+            ],
+            "key_waypoints": [(51.5, 0.0), (spur_tip_lat, 0.0)],
+        }
+    ]
+
+
+def _make_clean_3leg_result():
+    """Builds a 3-leg result where all bearings are consistent (no U-turn).
+
+    Leg 0: east.  Leg 1: northeast.  Leg 2: east.
+    """
+    return [
+        {
+            "overview_polyline": {"points": "_p~iF~ps|U_ulLnnqC"},
+            "legs": [
+                {
+                    "distance": {"value": 20000},
+                    "duration": {"value": 1200},
+                    "start_address": "A",
+                    "end_address": "B",
+                    "steps": [
+                        {
+                            "distance": {"value": 20000},
+                            "html_instructions": "East",
+                            "start_location": {"lat": 51.5, "lng": -0.2},
+                            "end_location": {"lat": 51.5, "lng": 0.0},
+                            "polyline": {"points": _encode_polyline(
+                                [(51.5, -0.2), (51.5, -0.1), (51.5, 0.0)]
+                            )},
+                        },
+                    ],
+                },
+                {
+                    "distance": {"value": 20000},
+                    "duration": {"value": 1200},
+                    "start_address": "B",
+                    "end_address": "C",
+                    "steps": [
+                        {
+                            "distance": {"value": 20000},
+                            "html_instructions": "Northeast",
+                            "start_location": {"lat": 51.5, "lng": 0.0},
+                            "end_location": {"lat": 51.6, "lng": 0.1},
+                            "polyline": {"points": _encode_polyline(
+                                [(51.5, 0.0), (51.55, 0.05), (51.6, 0.1)]
+                            )},
+                        },
+                    ],
+                },
+                {
+                    "distance": {"value": 20000},
+                    "duration": {"value": 1200},
+                    "start_address": "C",
+                    "end_address": "D",
+                    "steps": [
+                        {
+                            "distance": {"value": 20000},
+                            "html_instructions": "East",
+                            "start_location": {"lat": 51.6, "lng": 0.1},
+                            "end_location": {"lat": 51.6, "lng": 0.3},
+                            "polyline": {"points": _encode_polyline(
+                                [(51.6, 0.1), (51.6, 0.2), (51.6, 0.3)]
+                            )},
+                        },
+                    ],
+                },
+            ],
+            "key_waypoints": [(51.5, 0.0), (51.6, 0.1)],
+        }
+    ]
+
+
+# -- _decode_leg_polyline tests --
+
+
+def test_decode_leg_polyline_concatenates_steps():
+    """Step polylines should be concatenated with boundary dedup."""
+    leg = {
+        "steps": [
+            {"polyline": {"points": _encode_polyline(
+                [(51.0, 0.0), (51.1, 0.1), (51.2, 0.2)]
+            )}},
+            {"polyline": {"points": _encode_polyline(
+                [(51.2, 0.2), (51.3, 0.3), (51.4, 0.4)]
+            )}},
+        ],
+    }
+    pts = route_generation._decode_leg_polyline(leg)
+    assert len(pts) == 5  # 3 + 3 - 1 shared boundary
+    assert pts[0] == pytest.approx((51.0, 0.0), abs=1e-4)
+    assert pts[-1] == pytest.approx((51.4, 0.4), abs=1e-4)
+
+
+def test_decode_leg_polyline_empty_leg():
+    """Leg with no steps should return empty list."""
+    assert route_generation._decode_leg_polyline({"steps": []}) == []
+    assert route_generation._decode_leg_polyline({}) == []
+
+
+# -- _detect_uturn_waypoints tests --
+
+
+def test_detect_uturn_no_uturn():
+    """Consistent forward bearings should produce no U-turns."""
+    result = _make_clean_3leg_result()[0]
+    uturn = route_generation._detect_uturn_waypoints(result)
+    assert uturn == []
+
+
+def test_detect_uturn_detects_reversal():
+    """A north→south bearing change at a waypoint should be flagged."""
+    result = _make_spur_legs_result(spur_km=1.0)[0]
+    uturn = route_generation._detect_uturn_waypoints(result)
+    assert 1 in uturn  # waypoint 1 (between leg 1 and leg 2)
+
+
+def test_detect_uturn_skips_zero_length_step():
+    """A step with identical start/end should not crash or false-positive."""
+    result = _make_clean_3leg_result()[0]
+    # Make the last step of leg 0 zero-length.
+    result["legs"][0]["steps"][-1]["end_location"] = (
+        result["legs"][0]["steps"][-1]["start_location"].copy()
+    )
+    # Should not flag this as a U-turn — just skip it.
+    uturn = route_generation._detect_uturn_waypoints(result)
+    assert 0 not in uturn
+
+
+# -- _find_branch_point tests --
+
+
+def test_find_branch_point_simple_spur():
+    """A 1km spur should return a branch point near the junction."""
+    result = _make_spur_legs_result(spur_km=1.0)[0]
+    branch = route_generation._find_branch_point(result, 1)
+    assert branch is not None
+    # Branch point should be near (51.5, 0.0) — the base of the spur.
+    assert abs(branch[0] - 51.5) < 0.02
+    assert abs(branch[1] - 0.0) < 0.02
+
+
+def test_find_branch_point_returns_none_short_spur():
+    """A spur shorter than SPUR_SNAP_MIN_LENGTH_M should return None."""
+    result = _make_spur_legs_result(spur_km=0.1)[0]  # 100m spur
+    branch = route_generation._find_branch_point(result, 1)
+    assert branch is None
+
+
+# -- _snap_spur_waypoints tests --
+
+
+def test_snap_spur_waypoints_no_uturn():
+    """Clean route should return original waypoints and empty snapped list."""
+    result = _make_clean_3leg_result()[0]
+    wps = [(51.5, 0.0), (51.6, 0.1)]
+    new_wps, snapped = route_generation._snap_spur_waypoints(result, wps)
+    assert new_wps == wps
+    assert snapped == []
+
+
+def test_snap_spur_waypoints_snaps_one():
+    """A U-turn waypoint should be replaced with the branch point."""
+    result = _make_spur_legs_result(spur_km=1.0)[0]
+    spur_tip = 51.5 + 1.0 / 111.0
+    wps = [(51.5, 0.0), (spur_tip, 0.0)]
+    new_wps, snapped = route_generation._snap_spur_waypoints(result, wps)
+    assert 1 in snapped
+    # The snapped waypoint should be near the branch point (51.5, 0.0),
+    # not the original spur tip.
+    assert abs(new_wps[1][0] - 51.5) < 0.02
+    # First waypoint should be unchanged.
+    assert new_wps[0] == wps[0]
+
+
+# -- Integration: _build_and_validate with spur snapping --
+
+
+@pytest.mark.asyncio
+@patch("route_generation.requests.get", side_effect=_mock_sv_coverage_ok)
+async def test_build_and_validate_snaps_spur(mock_sv):
+    """Should detect a spur, snap the waypoint, and re-request directions."""
+    call_count = 0
+    spur_result = _make_spur_legs_result(spur_km=1.0)
+    clean_result = _make_clean_3leg_result()
+
+    class _SnapTestMapsClient:
+        def directions(self, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return spur_result  # First call: spur route
+            return clean_result     # Second call: clean route after snap
+
+        def geocode(self, address):
+            return [{"geometry": {"location": {"lat": 51.5, "lng": -0.1}}}]
+
+        def reverse_geocode(self, latlng):
+            return [{"formatted_address": "Test, UK"}]
+
+    maps = _SnapTestMapsClient()
+    spur_tip = 51.5 + 1.0 / 111.0
+    waypoints = [(51.5, 0.0), (spur_tip, 0.0)]
+    prefs = RoutePreferences(
+        start_location="51.5,-0.1",
+        distance_km=100,
+        curviness=3,
+        scenery_type="forests",
+        loop=True,
+    )
+    result, issues = await route_generation._build_and_validate(
+        maps, 51.5, -0.1, waypoints, prefs,
+    )
+    # Should have called directions twice (initial + snap retry).
+    assert call_count == 2
+    assert result is not None
+
+
+@pytest.mark.asyncio
+@patch("route_generation.requests.get", side_effect=_mock_sv_coverage_ok)
+async def test_build_and_validate_no_snap_single_leg(mock_sv):
+    """A single-leg route should skip snapping entirely."""
+    call_count = 0
+
+    class _SingleLegMapsClient:
+        def directions(self, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return _make_directions_result()  # Single-leg result
+
+        def geocode(self, address):
+            return [{"geometry": {"location": {"lat": 51.5, "lng": -0.1}}}]
+
+        def reverse_geocode(self, latlng):
+            return [{"formatted_address": "Test, UK"}]
+
+    maps = _SingleLegMapsClient()
+    waypoints = [(51.8, -0.3)]
+    prefs = RoutePreferences(
+        start_location="51.5,-0.1",
+        distance_km=100,
+        curviness=3,
+        scenery_type="forests",
+        loop=True,
+    )
+    result, issues = await route_generation._build_and_validate(
+        maps, 51.5, -0.1, waypoints, prefs,
+    )
+    # Only one directions call — no snapping for single-leg route.
+    assert call_count == 1
+
+
+# -- Widened SPUR_PROXIMITY_M safety net tests --
+
+
+def test_check_backtrack_spurs_catches_wider_spur():
+    """A spur with parallel roads 250m apart should now be caught (was 100m)."""
+    # Build a polyline with a spur where the return path is offset ~250m east.
+    points = []
+    # Main route going east.
+    for i in range(50):
+        points.append((52.0, 5.0 + i * 0.002))
+    # Spur: go north 2km on road A.
+    for i in range(40):
+        points.append((52.0 + i * 0.0005, 5.1))
+    # Spur: come back south on parallel road ~250m east.
+    lng_offset = 250 / 70_000  # ~250m in longitude at 52°N
+    for i in range(40):
+        points.append((52.02 - i * 0.0005, 5.1 + lng_offset))
+    # Continue east on main route.
+    for i in range(50):
+        points.append((52.0, 5.1 + lng_offset + i * 0.002))
+    encoded = _encode_polyline(points)
+    issues = route_generation._check_backtrack_spurs(encoded)
+    assert len(issues) > 0
+    assert "spur" in issues[0].lower()
+
+
+def test_check_backtrack_spurs_clean_loop_still_passes():
+    """Existing clean-loop test should still pass with widened threshold."""
+    points = []
+    for i in range(100):
+        points.append((51.0 + i * 0.005, 0.0))
+    for i in range(100):
+        points.append((51.5, 0.0 + i * 0.008))
+    for i in range(100):
+        points.append((51.5 - i * 0.005, 0.8))
+    for i in range(100):
+        points.append((51.0, 0.8 - i * 0.008))
+    encoded = _encode_polyline(points)
+    issues = route_generation._check_backtrack_spurs(encoded)
+    assert issues == []

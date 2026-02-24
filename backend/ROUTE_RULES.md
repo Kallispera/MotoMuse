@@ -87,10 +87,25 @@ long compared to the straight-line distance.
 | Constant | Default | What it does |
 |---|---|---|
 | `SPUR_SAMPLE_INTERVAL_M` | `200` | Distance between sampled polyline points in metres. |
-| `SPUR_PROXIMITY_M` | `100` | Two sampled points closer than this may be spur endpoints. |
+| `SPUR_PROXIMITY_M` | `300` | Two sampled points closer than this may be spur endpoints. |
 | `SPUR_MIN_INDEX_GAP` | `8` | Minimum samples apart to count as "non-adjacent". |
 | `SPUR_PATH_RATIO` | `5.0` | path_distance / straight_distance threshold for flagging. |
 | `SPUR_MIN_LENGTH_M` | `500` | Ignore spurs shorter than this. |
+
+**Waypoint spur snapping:** Before validation runs, the pipeline checks each
+waypoint for U-turns. If the route approaches a waypoint from one direction and
+departs in roughly the opposite direction (bearing difference > 140°), the
+waypoint is on a dead-end road. The algorithm then walks outward along the
+incoming and outgoing legs simultaneously to find the "branch point" — where the
+spur diverges from the main route. The waypoint is snapped to the branch point
+and directions are re-requested. This is a geometric fix (no Claude call) and
+happens transparently inside `_build_and_validate`.
+
+| Constant | Default | What it does |
+|---|---|---|
+| `UTURN_BEARING_THRESHOLD` | `140` | Bearing difference (°) between approach and departure that flags a U-turn at a waypoint. |
+| `SPUR_CORRIDOR_WIDTH_M` | `500` | Max distance (m) between approach/departure paths to be considered the same spur corridor. |
+| `SPUR_SNAP_MIN_LENGTH_M` | `200` | Ignore spurs shorter than this for snapping (not worth the re-request). |
 
 **Urban density detection:** Routes through cities produce many short steps with
 frequent turns. The validator counts steps shorter than a threshold.
@@ -149,7 +164,7 @@ so the camera faces along the road direction.
 | Faster generation (less cost) | Lower `MAX_ROUTE_ATTEMPTS`, lower waypoint counts |
 | More waypoints per route | Increase `LOOP_WAYPOINT_COUNT` / `ONEWAY_WAYPOINT_COUNT` |
 | Stricter about double-backs | Lower `OVERLAP_FRACTION_LIMIT`, lower `OVERLAP_PROXIMITY_THRESHOLD_M` |
-| Stricter about dead-end spurs | Lower `SPUR_MIN_LENGTH_M`, lower `SPUR_PATH_RATIO` |
+| Stricter about dead-end spurs | Lower `SPUR_MIN_LENGTH_M`, lower `SPUR_PATH_RATIO`, lower `UTURN_BEARING_THRESHOLD` |
 | Stricter about urban routing | Lower `URBAN_SHORT_STEP_FRACTION_LIMIT`, lower `URBAN_SHORT_STEP_THRESHOLD_M` |
 | Different narrative style | Edit `_NARRATIVE_PROMPT` in `route_generation.py` |
 | Change waypoint generation rules | Edit `_WAYPOINT_GENERATION_PROMPT` in `route_generation.py` |
