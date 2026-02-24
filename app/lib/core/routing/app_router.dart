@@ -8,6 +8,8 @@ import 'package:motomuse/features/garage/presentation/add_bike_screen.dart';
 import 'package:motomuse/features/garage/presentation/bike_review_screen.dart';
 import 'package:motomuse/features/garage/presentation/garage_screen.dart';
 import 'package:motomuse/features/profile/presentation/profile_screen.dart';
+import 'package:motomuse/features/scout/domain/generated_route.dart';
+import 'package:motomuse/features/scout/presentation/route_preview_screen.dart';
 import 'package:motomuse/features/scout/presentation/scout_screen.dart';
 import 'package:motomuse/shared/widgets/app_shell.dart';
 
@@ -30,6 +32,9 @@ abstract final class AppRoutes {
 
   /// Profile tab path.
   static const String profile = '/profile';
+
+  /// Route preview path — pass a [GeneratedRoute] via GoRouter `extra`.
+  static const String routePreview = '/scout/preview';
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +97,14 @@ final routerProvider = Provider<GoRouter>((ref) {
           final extra = state.extra;
           if (extra is! BikePhotoAnalysis) return const AddBikeScreen();
           return BikeReviewScreen(analysis: extra);
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.routePreview,
+        builder: (context, state) {
+          final extra = state.extra;
+          if (extra is! GeneratedRoute) return const ScoutScreen();
+          return RoutePreviewScreen(route: extra);
         },
       ),
       // Shell route — wraps tab screens with the bottom navigation bar.

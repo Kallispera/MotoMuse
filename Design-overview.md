@@ -174,13 +174,24 @@ Phase 2: The "Garage" & Vision (✅ Complete)
   - New Flutter packages: `image_picker ^1.1.0`, `firebase_storage ^12.0.0`, `http ^1.2.0` ✅
   - Success: User uploads a photo (live or gallery), receives an affirming LLM-generated message about their motorcycle with interesting details, and can correct/confirm the bike details ✅
 
-Phase 3: The Route Architect
-  - Implement the full route generation data flow on Cloud Run (geocoding → segment scoring → LLM waypoint selection → Directions API → validation loop)
-  - Build the route preview card (map, imagery, narrative, duration)
-  - Implement turn-by-turn navigation subsystem (google_maps_flutter + flutter_tts)
-  - Implement offline pre-caching of route data before ride start
-  - Implement user route rating and feedback storage in Firestore
-  - Success: User configures a ride, receives a high-quality previewed route, and can navigate it with turn-by-turn voice guidance
+Phase 3: The Route Architect (✅ Core route generation complete)
+  Phase 3a — Route generation and map display (complete):
+  - Scout screen built: distance slider, curviness stars, scenery chip selector, loop/one-way toggle, lunch stop toggle, GPS start location auto-fill via geolocator ✅
+  - Cloud Run /generate-route endpoint: nine-step pipeline — geocoding → geometric candidate waypoints → Elevation API scoring → Places API scenery scoring → Claude Sonnet waypoint selection → Directions API (avoid highways/tolls) → programmatic validation (U-turns, highway %) with up to 3 LLM retry cycles → Claude narrative → Street View Static images ✅
+  - Route preview screen: google_maps_flutter map with decoded polyline, Street View image horizontal scroll, route stats, LLM narrative ✅
+  - New Flutter packages: geolocator ^13.0.0, google_maps_flutter ^2.9.0 ✅
+  - New backend packages: googlemaps 4.10.0, anthropic 0.49.0 (Claude Sonnet for route selection and narrative) ✅
+  - Claude Sonnet (claude-sonnet-4-6) used for waypoint selection and route narrative ✅
+  - LLM cost estimate per route generation: ~$0.01–$0.03 (Claude Sonnet, 2 calls) + Google Maps API calls
+  - Backend deployed to Cloud Run; GOOGLE_MAPS_API_KEY added to Secret Manager alongside OPENAI_API_KEY ✅
+  - 142 Flutter tests pass; 0 flutter analyze errors ✅
+
+  Phase 3b — Deferred to later iteration:
+  - Turn-by-turn navigation subsystem (google_maps_flutter + flutter_tts)
+  - Offline pre-caching of route data before ride start
+  - User route rating and feedback storage in Firestore
+
+  - Success: User configures a ride on the Scout screen, receives a high-quality route displayed on a map with Street View imagery and a narrative description ✅
 
 Phase 4: Audio & Spotify
   - Implement Spotify OAuth and account linking
