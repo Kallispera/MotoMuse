@@ -11,6 +11,7 @@ import 'package:motomuse/features/garage/domain/bike.dart';
 import 'package:motomuse/features/garage/domain/bike_exception.dart';
 import 'package:motomuse/features/garage/domain/bike_photo_analysis.dart';
 import 'package:motomuse/features/garage/domain/bike_repository.dart';
+import 'package:motomuse/features/onboarding/application/onboarding_providers.dart';
 
 // ---------------------------------------------------------------------------
 // Infrastructure providers (overridable in tests)
@@ -80,11 +81,25 @@ final userBikesProvider = StreamProvider<List<Bike>>((ref) {
 /// Generates a one-liner about the rider's overall bike collection.
 ///
 /// Returns `null` when the user has fewer than two bikes (no comparison to
-/// make). Refreshes automatically whenever the bike list changes.
+/// make). Uses a cached value from the user profile if available and the
+/// bike count hasn't changed, to avoid redundant AI calls.
 final garagePersonalityProvider = FutureProvider<String?>((ref) async {
   final bikes = ref.watch(userBikesProvider).valueOrNull;
   if (bikes == null || bikes.length < 2) return null;
 
+  final uid = ref.read(authStateChangesProvider).valueOrNull?.uid;
+  if (uid == null) return null;
+
+  // Check for a cached personality in the user profile.
+  final profile = ref.read(userProfileProvider).valueOrNull;
+  if (profile != null &&
+      profile.garagePersonality != null &&
+      profile.garagePersonality!.isNotEmpty &&
+      profile.garagePersonalityBikeCount == bikes.length) {
+    return profile.garagePersonality;
+  }
+
+  // Generate a new one.
   final service = ref.read(cloudRunBikeServiceProvider);
   final summaries = bikes
       .map(
@@ -97,7 +112,18 @@ final garagePersonalityProvider = FutureProvider<String?>((ref) async {
       )
       .toList();
 
-  return service.garagePersonality(summaries);
+  final personality = await service.garagePersonality(summaries);
+
+  // Cache the result in Firestore.
+  if (personality.isNotEmpty) {
+    await ref.read(userProfileRepositoryProvider).updateGaragePersonality(
+          uid: uid,
+          personality: personality,
+          bikeCount: bikes.length,
+        );
+  }
+
+  return personality.isNotEmpty ? personality : null;
 });
 
 // ---------------------------------------------------------------------------

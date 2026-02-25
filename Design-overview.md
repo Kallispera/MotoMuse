@@ -157,7 +157,7 @@ Key Screens for MVP:
   - Splash/Onboarding: Narrative-driven intro.
   - Garage (Profile): Upload multiple bikes. LLM recognizes make/model/extras. After recognition, results are displayed in editable fields so the user can correct any inaccuracies (make, model, year, colour, trim/extras). Confirmed data is saved to Firestore.
   - The "Scout" (Home): Ride type selector (Breakfast Run / Day Out / Overnighter) with conditional controls per type. Breakfast Run and Overnighter show destination pickers from curated Firestore data; Day Out shows optional riding area picker. Common controls: curviness, scenery type, distance (Day Out only), loop toggle (Day Out without area only).
-  - Explore: Browse curated riding content — three tabs for Locations, Restaurants, and Hotels. Each card links to a detail screen with CTA buttons that deep-link to Scout with preferences pre-filled.
+  - Explore: Browse curated riding content — three tabs for Locations, Restaurants, and Hotels. Each card links to a detail screen with CTA buttons that deep-link to Scout with preferences pre-filled. Detail screens include "View on map" buttons showing polygon outlines for regions and point markers for restaurants/hotels.
   - Route Preview: Route card showing map overview (two polylines for there-and-back routes: gold outbound, dashed blueGrey return), Street View imagery at key waypoints (combined from both legs), narrative description, estimated duration/distance per leg, and Spotify playlist link. User confirms before navigation begins.
   - The Ride: Turn-by-turn navigation with a minimalist "Next Turn" UI and a "Voiceover Toggle." Offline-capable once route is pre-cached.
 
@@ -253,3 +253,36 @@ Phase 5: Regional Riding Content & Route Types (✅ Complete — Netherlands)
   - New backend packages: firebase-admin >=6.0.0 (seed script only)
   - 142 Flutter tests pass; 0 flutter analyze errors ✅
   - Success: Users can browse curated Netherlands riding content, plan rides to specific restaurants/hotels with scenic there-and-back routes on different roads, and explore regional riding areas ✅
+
+Phase 6: Map Views, Home Address Onboarding & Persistent Affirming Messages (✅ Complete)
+  Map views for explore content:
+  - "View on Map" button added to LocationDetailScreen, RestaurantDetailScreen, and HotelDetailScreen
+  - Reusable `ItemMapScreen` with named constructors (`.location()`, `.restaurant()`, `.hotel()`)
+  - Riding regions displayed with polygon boundary outlines (semi-transparent amber/gold fill, 3px stroke)
+  - Restaurants and hotels displayed as single point markers
+  - Polygon coordinates (6-10 points per region) added to seed script and `riding_locations` Firestore documents
+  - `RidingLocation` model extended with `polygonPoints: List<LatLng>` field (backward-compatible default `const []`)
+  - Falls back to bounding box rectangle when polygon data is empty
+
+  Home address onboarding:
+  - `HomeAddressScreen` captures the rider's home address after their first bike addition
+  - Geocoding via new `POST /geocode-address` backend endpoint (Google Geocoding API, server-side)
+  - Closest riding region calculated using Haversine distance formula
+  - Affirming message generated via new `POST /home-affirming-message` backend endpoint (Claude Haiku)
+  - Address, geocoded coordinates, and affirming message permanently saved to `users/{uid}`
+  - Onboarding trigger: `GarageScreen` watches `needsOnboardingProvider` and redirects to address screen
+  - "Skip for now" option marks onboarding complete without address
+
+  Persistent affirming messages:
+  - Per-bike `affirmingMessage` and `personalityLine`: already saved in Firestore (no change needed)
+  - Garage personality banner: now cached in `users/{uid}/garagePersonality` with `garagePersonalityBikeCount`; only regenerated when bike count changes (eliminates redundant Cloud Run calls)
+  - Home affirming message: generated once and saved in `users/{uid}/homeAffirmingMessage`
+
+  User profile domain model:
+  - New `UserProfile` value object and `FirestoreUserProfileRepository` in `features/profile/`
+  - Fields: uid, homeAddress, homeLocation, country, hasCompletedOnboarding, garagePersonality, garagePersonalityBikeCount, homeAffirmingMessage
+  - Onboarding providers in `features/onboarding/application/`
+
+  - New backend endpoints: `POST /geocode-address`, `POST /home-affirming-message`
+  - 162 Flutter tests pass; 0 flutter analyze errors ✅
+  - Success: Riders can see their riding areas on a map with polygon outlines, view restaurants/hotels as map markers, and receive a personalized affirming message about their closest riding region during onboarding ✅

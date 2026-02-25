@@ -43,6 +43,43 @@ class GaragePersonalityResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Geocode models
+# ---------------------------------------------------------------------------
+
+
+class GeocodeRequest(BaseModel):
+    """Request body for the /geocode-address endpoint."""
+
+    address: str
+
+
+class GeocodeResponse(BaseModel):
+    """Response from the /geocode-address endpoint."""
+
+    lat: float
+    lng: float
+    formatted_address: str
+
+
+# ---------------------------------------------------------------------------
+# Home affirming message models
+# ---------------------------------------------------------------------------
+
+
+class HomeAffirmingRequest(BaseModel):
+    """Request body for the /home-affirming-message endpoint."""
+
+    address: str
+    closest_region: str
+
+
+class HomeAffirmingResponse(BaseModel):
+    """Response from the /home-affirming-message endpoint."""
+
+    message: str
+
+
+# ---------------------------------------------------------------------------
 # Route generation models
 # ---------------------------------------------------------------------------
 

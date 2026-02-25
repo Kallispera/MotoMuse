@@ -8,12 +8,14 @@ import 'package:motomuse/features/explore/domain/restaurant.dart';
 import 'package:motomuse/features/explore/domain/riding_location.dart';
 import 'package:motomuse/features/explore/presentation/explore_screen.dart';
 import 'package:motomuse/features/explore/presentation/hotel_detail_screen.dart';
+import 'package:motomuse/features/explore/presentation/item_map_screen.dart';
 import 'package:motomuse/features/explore/presentation/location_detail_screen.dart';
 import 'package:motomuse/features/explore/presentation/restaurant_detail_screen.dart';
 import 'package:motomuse/features/garage/domain/bike_photo_analysis.dart';
 import 'package:motomuse/features/garage/presentation/add_bike_screen.dart';
 import 'package:motomuse/features/garage/presentation/bike_review_screen.dart';
 import 'package:motomuse/features/garage/presentation/garage_screen.dart';
+import 'package:motomuse/features/onboarding/presentation/home_address_screen.dart';
 import 'package:motomuse/features/profile/presentation/profile_screen.dart';
 import 'package:motomuse/features/scout/domain/generated_route.dart';
 import 'package:motomuse/features/scout/presentation/route_preview_screen.dart';
@@ -48,6 +50,13 @@ abstract final class AppRoutes {
 
   /// Hotel detail — pass a [Hotel] via GoRouter `extra`.
   static const String hotelDetail = '/explore/hotel';
+
+  /// Map view for any explore item — pass a RidingLocation, Restaurant,
+  /// or Hotel via GoRouter `extra`.
+  static const String itemMap = '/explore/map';
+
+  /// Home address onboarding screen.
+  static const String homeAddress = '/onboarding/home-address';
 
   /// Profile tab path.
   static const String profile = '/profile';
@@ -150,6 +159,26 @@ final routerProvider = Provider<GoRouter>((ref) {
           if (extra is! Hotel) return const ExploreScreen();
           return HotelDetailScreen(hotel: extra);
         },
+      ),
+      GoRoute(
+        path: AppRoutes.itemMap,
+        builder: (context, state) {
+          final extra = state.extra;
+          if (extra is RidingLocation) {
+            return ItemMapScreen.location(location: extra);
+          }
+          if (extra is Restaurant) {
+            return ItemMapScreen.restaurant(restaurant: extra);
+          }
+          if (extra is Hotel) {
+            return ItemMapScreen.hotel(hotel: extra);
+          }
+          return const ExploreScreen();
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.homeAddress,
+        builder: (context, state) => const HomeAddressScreen(),
       ),
       // Shell route — wraps tab screens with the bottom navigation bar.
       ShellRoute(

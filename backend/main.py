@@ -1,12 +1,16 @@
 """MotoMuse Cloud Run backend service.
 
 Exposes endpoints for motorcycle photo analysis, garage personality
-generation, and route generation.
+generation, route generation, address geocoding, and home affirming messages.
 """
 
 import logging
+import os
 
+from anthropic import AsyncAnthropic
 from fastapi import FastAPI, HTTPException
+
+import googlemaps
 
 import bike_vision
 import route_generation
@@ -15,6 +19,10 @@ from models import (
     BikeAnalysisResponse,
     GaragePersonalityRequest,
     GaragePersonalityResponse,
+    GeocodeRequest,
+    GeocodeResponse,
+    HomeAffirmingRequest,
+    HomeAffirmingResponse,
     RoutePreferences,
     RouteResult,
 )
@@ -142,4 +150,114 @@ async def generate_route(request: RoutePreferences) -> RouteResult:
         raise HTTPException(
             status_code=502,
             detail="Failed to generate a route. Please try again.",
+        ) from exc
+
+
+@app.post("/geocode-address", response_model=GeocodeResponse)
+async def geocode_address(request: GeocodeRequest) -> GeocodeResponse:
+    """Geocodes a human-readable address to lat/lng coordinates.
+
+    Uses the Google Maps Geocoding API to resolve the address.
+
+    Args:
+        request: Contains ``address``, the address string to geocode.
+
+    Returns:
+        ``GeocodeResponse`` with lat, lng, and the Google-formatted address.
+
+    Raises:
+        HTTPException 400: If address is empty.
+        HTTPException 404: If the address could not be geocoded.
+        HTTPException 502: If the upstream Google Maps API call fails.
+    """
+    if not request.address.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="address must not be empty.",
+        )
+    try:
+        gmaps = googlemaps.Client(
+            key=os.environ.get("GOOGLE_MAPS_API_KEY", ""),
+        )
+        result = gmaps.geocode(request.address)
+        if not result:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Could not geocode address: {request.address!r}",
+            )
+        location = result[0]["geometry"]["location"]
+        formatted = result[0].get("formatted_address", request.address)
+        return GeocodeResponse(
+            lat=float(location["lat"]),
+            lng=float(location["lng"]),
+            formatted_address=formatted,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logging.exception("geocode_address failed")
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to geocode the address. Please try again.",
+        ) from exc
+
+
+@app.post("/home-affirming-message", response_model=HomeAffirmingResponse)
+async def home_affirming_message(
+    request: HomeAffirmingRequest,
+) -> HomeAffirmingResponse:
+    """Generates a warm, affirming message about living near a great riding area.
+
+    Uses Claude Haiku to produce a short 2-3 sentence message telling the
+    rider how lucky they are to live close to the specified riding region.
+
+    Args:
+        request: Contains ``address`` (the rider's home address) and
+            ``closest_region`` (name of the nearest riding area).
+
+    Returns:
+        ``HomeAffirmingResponse`` with the generated ``message``.
+
+    Raises:
+        HTTPException 400: If address or closest_region is empty.
+        HTTPException 502: If the upstream Anthropic API call fails.
+    """
+    if not request.address.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="address must not be empty.",
+        )
+    if not request.closest_region.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="closest_region must not be empty.",
+        )
+    try:
+        anthropic_client = AsyncAnthropic(
+            api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+        )
+        response = await anthropic_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=256,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"The rider lives at {request.address} and the closest "
+                        f"great motorcycle riding area is {request.closest_region}. "
+                        "Write a warm, affirming 2-3 sentence message about how "
+                        "lucky they are to live so close to such a wonderful "
+                        "riding area. Be specific about the region. Do not use "
+                        "any markdown formatting."
+                    ),
+                },
+            ],
+        )
+        message_text = response.content[0].text
+        return HomeAffirmingResponse(message=message_text)
+    except Exception as exc:  # noqa: BLE001
+        logging.exception("home_affirming_message failed")
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to generate affirming message. Please try again.",
         ) from exc

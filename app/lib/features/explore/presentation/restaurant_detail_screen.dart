@@ -79,6 +79,15 @@ class RestaurantDetailScreen extends StatelessWidget {
               icon: const Icon(Icons.coffee_outlined),
               label: const Text('Plan a breakfast run'),
             ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () => context.push(
+                AppRoutes.itemMap,
+                extra: restaurant,
+              ),
+              icon: const Icon(Icons.map_outlined),
+              label: const Text('View on map'),
+            ),
           ],
         ),
       ),

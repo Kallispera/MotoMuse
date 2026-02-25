@@ -79,6 +79,15 @@ class LocationDetailScreen extends ConsumerWidget {
                     icon: const Icon(Icons.route_outlined),
                     label: const Text('Plan a ride here'),
                   ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: () => context.push(
+                      AppRoutes.itemMap,
+                      extra: location,
+                    ),
+                    icon: const Icon(Icons.map_outlined),
+                    label: const Text('View on map'),
+                  ),
                   const SizedBox(height: 24),
 
                   // Restaurants in this area.

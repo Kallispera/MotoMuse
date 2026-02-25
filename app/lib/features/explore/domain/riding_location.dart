@@ -20,6 +20,7 @@ class RidingLocation {
     required this.tags,
     required this.sceneryType,
     required this.order,
+    this.polygonPoints = const [],
   });
 
   /// Firestore document ID.
@@ -54,6 +55,10 @@ class RidingLocation {
 
   /// Display ordering.
   final int order;
+
+  /// Polygon boundary coordinates defining the riding area shape.
+  /// Falls back to the bounding box rectangle when empty.
+  final List<LatLng> polygonPoints;
 
   /// Approximate radius in km (half the diagonal of the bounding box).
   double get radiusKm {

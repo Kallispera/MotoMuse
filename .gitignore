@@ -11,6 +11,7 @@
 *.env
 .env.*
 secrets/
+backend/firebase-sa-key.json
 
 # Python (backend)
 __pycache__/

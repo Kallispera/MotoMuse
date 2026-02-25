@@ -105,6 +105,15 @@ class HotelDetailScreen extends StatelessWidget {
               icon: const Icon(Icons.bedtime_outlined),
               label: const Text('Plan an overnighter'),
             ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () => context.push(
+                AppRoutes.itemMap,
+                extra: hotel,
+              ),
+              icon: const Icon(Icons.map_outlined),
+              label: const Text('View on map'),
+            ),
           ],
         ),
       ),

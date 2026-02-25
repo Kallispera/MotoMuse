@@ -5,6 +5,7 @@ import 'package:motomuse/core/routing/app_router.dart';
 import 'package:motomuse/core/theme/app_colors.dart';
 import 'package:motomuse/features/garage/application/garage_providers.dart';
 import 'package:motomuse/features/garage/domain/bike.dart';
+import 'package:motomuse/features/onboarding/application/onboarding_providers.dart';
 
 /// Garage screen — lists the user's bikes and provides an entry point to add
 /// new ones.
@@ -19,6 +20,15 @@ class GarageScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final bikesValue = ref.watch(userBikesProvider);
+
+    // Redirect to onboarding if the user has bikes but hasn't set up their
+    // home address yet.
+    final needsOnboarding = ref.watch(needsOnboardingProvider);
+    if (needsOnboarding) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (context.mounted) context.go(AppRoutes.homeAddress);
+      });
+    }
 
     return Scaffold(
       appBar: AppBar(

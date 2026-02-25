@@ -114,6 +114,7 @@ class FirestoreExploreRepository implements ExploreRepository {
       tags: _stringList(data['tags']),
       sceneryType: data['scenery_type'] as String? ?? 'mixed',
       order: (data['order'] as num?)?.toInt() ?? 0,
+      polygonPoints: _geoPointList(data['polygon_points']),
     );
   }
 
@@ -168,6 +169,16 @@ class FirestoreExploreRepository implements ExploreRepository {
   List<String> _stringList(dynamic value) {
     if (value is List) {
       return value.cast<String>();
+    }
+    return const [];
+  }
+
+  List<LatLng> _geoPointList(dynamic value) {
+    if (value is List) {
+      return value
+          .whereType<GeoPoint>()
+          .map((g) => LatLng(g.latitude, g.longitude))
+          .toList();
     }
     return const [];
   }

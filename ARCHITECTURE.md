@@ -18,7 +18,7 @@
   - Firebase Auth — sign-in / session management
   - Firestore — reads/writes user profile, bikes, riding content (locations, restaurants, hotels)
   - Firebase Storage — uploads bike photos
-  - Cloud Run backend — POST /analyze-bike, POST /generate-route
+  - Cloud Run backend — POST /analyze-bike, POST /generate-route, POST /geocode-address, POST /home-affirming-message
   - Google Maps (via `google_maps_flutter`) — map display + navigation
 
 ---
@@ -41,6 +41,9 @@
 - **Endpoints:**
   - `POST /analyze-bike` — Bike vision (GPT-5.2 two-phase call)
   - `POST /generate-route` — Route generation pipeline
+  - `POST /garage-personality` — Garage personality one-liner (Claude)
+  - `POST /geocode-address` — Geocode a home address (Google Geocoding API)
+  - `POST /home-affirming-message` — Generate affirming message about closest riding region (Claude Haiku)
 - **Secrets injected:** `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_MAPS_API_KEY`
 
 #### Cloud Functions *(planned)*
@@ -64,6 +67,7 @@
 |-----|----------|--------|
 | OpenAI GPT-5.2 | Bike vision extraction + affirming message | ✅ Live |
 | Anthropic Claude Sonnet | Route waypoint selection, narrative, descriptions | ✅ Live |
+| Anthropic Claude Haiku | Home address affirming message generation | ✅ Live |
 | Google Maps Geocoding | Convert start address to coordinates | ✅ Live |
 | Google Maps Directions | Build navigable route from waypoints | ✅ Live |
 | Google Maps Street View Static | Scenic imagery at key waypoints | ✅ Live |
@@ -135,11 +139,11 @@ Same pipeline runs twice:
 ## Firestore Collections
 
 ### User data
-- `users/{uid}` — user profile (country, preferences)
-- `users/{uid}/bikes/{bikeId}` — bike records (make, model, year, mods, photo URL)
+- `users/{uid}` — user profile (country, homeAddress, homeLocation GeoPoint, hasCompletedOnboarding bool, garagePersonality string, garagePersonalityBikeCount int, homeAffirmingMessage string)
+- `users/{uid}/bikes/{bikeId}` — bike records (make, model, year, mods, photo URL, personalityLine, affirmingMessage)
 
 ### Curated riding content (seeded via `backend/seed_data.py`)
-- `riding_locations/{id}` — riding regions (name, description, center/bounds GeoPoints, tags, scenery type, photo URLs, country, order)
+- `riding_locations/{id}` — riding regions (name, description, center/bounds GeoPoints, polygon_points GeoPoint array, tags, scenery type, photo URLs, country, order)
 - `restaurants/{id}` — biker-friendly restaurants (name, description, location GeoPoint, riding_location_id, cuisine, price range, country, order)
 - `hotels/{id}` — biker-friendly hotels (name, description, location GeoPoint, riding_location_id, price range, biker amenities, country, order)
 
@@ -159,11 +163,12 @@ MotoMuse/
 │   │       ├── auth/           # sign-in, auth providers
 │   │       ├── garage/         # bike upload, vision, review
 │   │       ├── scout/          # route preferences, generation, preview
-│   │       ├── explore/        # browse riding locations, restaurants, hotels
-│   │       └── profile/        # user profile screen
+│   │       ├── explore/        # browse riding locations, restaurants, hotels, map views
+│   │       ├── onboarding/    # home address capture, closest region, affirming messages
+│   │       └── profile/        # user profile screen, UserProfile domain model & repository
 │   └── test/                   # mirrors lib/ structure
 ├── backend/                    # Cloud Run Python service
-│   ├── main.py                 # FastAPI app — /analyze-bike, /generate-route
+│   ├── main.py                 # FastAPI app — /analyze-bike, /generate-route, /geocode-address, /home-affirming-message
 │   ├── bike_vision.py          # GPT-5.2 two-phase call logic
 │   ├── route_generation.py     # Route pipeline: Claude + Google Maps + validation
 │   ├── models.py               # Pydantic request/response models

@@ -60,6 +60,17 @@ REGIONS = [
         "bounds_sw": {"lat": 50.73, "lng": 5.70},
         "tags": ["twisty", "hills", "scenic", "valleys"],
         "scenery_type": "mountains",
+        "polygon": [
+            {"lat": 50.92, "lng": 5.74},
+            {"lat": 50.91, "lng": 5.95},
+            {"lat": 50.88, "lng": 6.08},
+            {"lat": 50.82, "lng": 6.02},
+            {"lat": 50.75, "lng": 6.01},
+            {"lat": 50.73, "lng": 5.91},
+            {"lat": 50.75, "lng": 5.77},
+            {"lat": 50.81, "lng": 5.70},
+            {"lat": 50.87, "lng": 5.70},
+        ],
         "scenic_roads": [
             # Cauberg climb road — famous cycling/riding hill
             {"lat": 50.8622, "lng": 5.8268, "heading": 150},
@@ -82,6 +93,17 @@ REGIONS = [
         "bounds_sw": {"lat": 52.05, "lng": 5.60},
         "tags": ["forests", "heathland", "sweeping", "nature"],
         "scenery_type": "forests",
+        "polygon": [
+            {"lat": 52.40, "lng": 5.63},
+            {"lat": 52.45, "lng": 5.80},
+            {"lat": 52.43, "lng": 6.05},
+            {"lat": 52.35, "lng": 6.10},
+            {"lat": 52.18, "lng": 6.05},
+            {"lat": 52.05, "lng": 5.95},
+            {"lat": 52.07, "lng": 5.72},
+            {"lat": 52.10, "lng": 5.60},
+            {"lat": 52.25, "lng": 5.60},
+        ],
         "scenic_roads": [
             # N-road near Beekbergen — confirmed coverage, forest road
             {"lat": 52.1850, "lng": 5.9240, "heading": 340},
@@ -104,6 +126,18 @@ REGIONS = [
         "bounds_sw": {"lat": 51.30, "lng": 3.40},
         "tags": ["coastal", "dykes", "flat", "wind", "bridges"],
         "scenery_type": "coastline",
+        "polygon": [
+            {"lat": 51.75, "lng": 3.65},
+            {"lat": 51.73, "lng": 3.90},
+            {"lat": 51.68, "lng": 4.10},
+            {"lat": 51.58, "lng": 4.20},
+            {"lat": 51.42, "lng": 4.15},
+            {"lat": 51.30, "lng": 3.90},
+            {"lat": 51.35, "lng": 3.55},
+            {"lat": 51.45, "lng": 3.40},
+            {"lat": 51.55, "lng": 3.42},
+            {"lat": 51.65, "lng": 3.50},
+        ],
         "scenic_roads": [
             # N57 Brouwersdam — straight road over the dam, sea on both sides
             {"lat": 51.7480, "lng": 3.8680, "heading": 210},
@@ -126,6 +160,17 @@ REGIONS = [
         "bounds_sw": {"lat": 52.70, "lng": 6.30},
         "tags": ["quiet", "forests", "heathland", "historic"],
         "scenery_type": "forests",
+        "polygon": [
+            {"lat": 53.10, "lng": 6.35},
+            {"lat": 53.08, "lng": 6.70},
+            {"lat": 53.05, "lng": 6.90},
+            {"lat": 52.90, "lng": 6.88},
+            {"lat": 52.75, "lng": 6.85},
+            {"lat": 52.70, "lng": 6.60},
+            {"lat": 52.72, "lng": 6.30},
+            {"lat": 52.85, "lng": 6.25},
+            {"lat": 53.00, "lng": 6.28},
+        ],
         "scenic_roads": [
             # Tree-lined road through Dwingelderveld national park
             {"lat": 52.7950, "lng": 6.3800, "heading": 170},
@@ -148,6 +193,16 @@ REGIONS = [
         "bounds_sw": {"lat": 51.85, "lng": 6.15},
         "tags": ["rolling", "quiet", "countryside", "backroads"],
         "scenery_type": "mixed",
+        "polygon": [
+            {"lat": 52.15, "lng": 6.20},
+            {"lat": 52.14, "lng": 6.50},
+            {"lat": 52.10, "lng": 6.75},
+            {"lat": 51.97, "lng": 6.73},
+            {"lat": 51.85, "lng": 6.65},
+            {"lat": 51.87, "lng": 6.35},
+            {"lat": 51.90, "lng": 6.15},
+            {"lat": 52.05, "lng": 6.18},
+        ],
         "scenic_roads": [
             # Backroad near Bronckhorst — NL's smallest town, countryside
             {"lat": 52.0700, "lng": 6.2300, "heading": 110},
@@ -170,6 +225,16 @@ REGIONS = [
         "bounds_sw": {"lat": 51.98, "lng": 5.15},
         "tags": ["wooded", "hills", "estates", "scenic"],
         "scenery_type": "forests",
+        "polygon": [
+            {"lat": 52.18, "lng": 5.20},
+            {"lat": 52.17, "lng": 5.38},
+            {"lat": 52.12, "lng": 5.55},
+            {"lat": 52.02, "lng": 5.52},
+            {"lat": 51.98, "lng": 5.42},
+            {"lat": 51.99, "lng": 5.25},
+            {"lat": 52.05, "lng": 5.15},
+            {"lat": 52.12, "lng": 5.16},
+        ],
         "scenic_roads": [
             # N225 Amerongen — winding road through wooded hills
             {"lat": 52.0020, "lng": 5.4620, "heading": 260},
@@ -192,6 +257,16 @@ REGIONS = [
         "bounds_sw": {"lat": 52.30, "lng": 6.05},
         "tags": ["rolling", "rivers", "farmland", "quiet"],
         "scenery_type": "mixed",
+        "polygon": [
+            {"lat": 52.58, "lng": 6.10},
+            {"lat": 52.60, "lng": 6.35},
+            {"lat": 52.55, "lng": 6.55},
+            {"lat": 52.42, "lng": 6.52},
+            {"lat": 52.30, "lng": 6.40},
+            {"lat": 52.32, "lng": 6.10},
+            {"lat": 52.38, "lng": 6.05},
+            {"lat": 52.50, "lng": 6.08},
+        ],
         "scenic_roads": [
             # Road near Raalte — confirmed coverage, Salland countryside
             {"lat": 52.5000, "lng": 6.3000, "heading": 250},
@@ -214,6 +289,16 @@ REGIONS = [
         "bounds_sw": {"lat": 51.30, "lng": 5.00},
         "tags": ["forests", "heathland", "quiet", "sandy"],
         "scenery_type": "forests",
+        "polygon": [
+            {"lat": 51.60, "lng": 5.05},
+            {"lat": 51.58, "lng": 5.35},
+            {"lat": 51.55, "lng": 5.60},
+            {"lat": 51.42, "lng": 5.58},
+            {"lat": 51.30, "lng": 5.45},
+            {"lat": 51.32, "lng": 5.15},
+            {"lat": 51.35, "lng": 5.00},
+            {"lat": 51.48, "lng": 5.02},
+        ],
         "scenic_roads": [
             # Road near Loon op Zand — confirmed coverage, forest edge
             {"lat": 51.6300, "lng": 5.0800, "heading": 300},
@@ -454,6 +539,10 @@ def _write_to_firestore(
             "tags": region_seed["tags"],
             "scenery_type": region_seed["scenery_type"],
             "order": order,
+            "polygon_points": [
+                firestore.firestore.GeoPoint(pt["lat"], pt["lng"])
+                for pt in region_seed.get("polygon", [])
+            ],
         }
         location_ref.set(location_data)
         logger.info("  Wrote location: %s", region_seed["name"])
