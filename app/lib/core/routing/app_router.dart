@@ -3,6 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:motomuse/features/auth/application/auth_providers.dart';
 import 'package:motomuse/features/auth/presentation/sign_in_screen.dart';
+import 'package:motomuse/features/explore/domain/hotel.dart';
+import 'package:motomuse/features/explore/domain/restaurant.dart';
+import 'package:motomuse/features/explore/domain/riding_location.dart';
+import 'package:motomuse/features/explore/presentation/explore_screen.dart';
+import 'package:motomuse/features/explore/presentation/hotel_detail_screen.dart';
+import 'package:motomuse/features/explore/presentation/location_detail_screen.dart';
+import 'package:motomuse/features/explore/presentation/restaurant_detail_screen.dart';
 import 'package:motomuse/features/garage/domain/bike_photo_analysis.dart';
 import 'package:motomuse/features/garage/presentation/add_bike_screen.dart';
 import 'package:motomuse/features/garage/presentation/bike_review_screen.dart';
@@ -29,6 +36,18 @@ abstract final class AppRoutes {
 
   /// Scout (route builder) tab path.
   static const String scout = '/scout';
+
+  /// Explore tab path — browse curated riding content.
+  static const String explore = '/explore';
+
+  /// Location detail — pass a [RidingLocation] via GoRouter `extra`.
+  static const String locationDetail = '/explore/location';
+
+  /// Restaurant detail — pass a [Restaurant] via GoRouter `extra`.
+  static const String restaurantDetail = '/explore/restaurant';
+
+  /// Hotel detail — pass a [Hotel] via GoRouter `extra`.
+  static const String hotelDetail = '/explore/hotel';
 
   /// Profile tab path.
   static const String profile = '/profile';
@@ -107,6 +126,31 @@ final routerProvider = Provider<GoRouter>((ref) {
           return RoutePreviewScreen(route: extra);
         },
       ),
+      // Explore detail routes (full screen, no bottom nav).
+      GoRoute(
+        path: AppRoutes.locationDetail,
+        builder: (context, state) {
+          final extra = state.extra;
+          if (extra is! RidingLocation) return const ExploreScreen();
+          return LocationDetailScreen(location: extra);
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.restaurantDetail,
+        builder: (context, state) {
+          final extra = state.extra;
+          if (extra is! Restaurant) return const ExploreScreen();
+          return RestaurantDetailScreen(restaurant: extra);
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.hotelDetail,
+        builder: (context, state) {
+          final extra = state.extra;
+          if (extra is! Hotel) return const ExploreScreen();
+          return HotelDetailScreen(hotel: extra);
+        },
+      ),
       // Shell route — wraps tab screens with the bottom navigation bar.
       ShellRoute(
         builder: (context, state, child) => AppShell(child: child),
@@ -119,8 +163,14 @@ final routerProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: AppRoutes.scout,
+            pageBuilder: (context, state) => NoTransitionPage(
+              child: ScoutScreen(prefill: state.extra as Map<String, dynamic>?),
+            ),
+          ),
+          GoRoute(
+            path: AppRoutes.explore,
             pageBuilder: (context, state) => const NoTransitionPage(
-              child: ScoutScreen(),
+              child: ExploreScreen(),
             ),
           ),
           GoRoute(

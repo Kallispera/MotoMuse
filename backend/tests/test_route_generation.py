@@ -1973,3 +1973,215 @@ async def test_generate_debug_validation_history_waypoints():
     assert len(entry.waypoints) == 5
     assert "lat" in entry.waypoints[0]
     assert "lng" in entry.waypoints[0]
+
+
+# ---------------------------------------------------------------------------
+# Route type system tests
+# ---------------------------------------------------------------------------
+
+
+_PREFS_BREAKFAST = RoutePreferences(
+    start_location="52.3676,4.9041",
+    distance_km=100,
+    curviness=3,
+    scenery_type="mixed",
+    loop=False,
+    route_type="breakfast_run",
+    destination_lat=50.84,
+    destination_lng=5.87,
+    destination_name="Café De Witte Berg",
+)
+
+_PREFS_OVERNIGHTER = RoutePreferences(
+    start_location="52.3676,4.9041",
+    distance_km=300,
+    curviness=4,
+    scenery_type="forests",
+    loop=False,
+    route_type="overnighter",
+    destination_lat=50.84,
+    destination_lng=5.87,
+    destination_name="Hotel Limburg",
+)
+
+_PREFS_DAY_OUT_AREA = RoutePreferences(
+    start_location="52.3676,4.9041",
+    distance_km=150,
+    curviness=4,
+    scenery_type="mountains",
+    loop=True,
+    route_type="day_out",
+    riding_area_lat=50.84,
+    riding_area_lng=5.87,
+    riding_area_radius_km=30,
+    riding_area_name="South Limburg",
+)
+
+
+class _MockClaudeClientThereAndBack:
+    """Mock Claude client that returns different waypoint counts for legs."""
+
+    def __init__(self):
+        self._call_count = 0
+
+        class _Messages:
+            def __init__(inner_self):
+                pass
+
+            async def create(inner_self, **kwargs):
+                inner_self  # noqa: B018
+                self._call_count += 1
+                msg = kwargs.get("messages", [{}])[0].get("content", "")
+
+                if "route description" in msg.lower() or "there-and-back" in msg.lower():
+                    content = (
+                        "The outbound leg takes you through scenic back roads. "
+                        "The return uses completely different roads for variety."
+                    )
+                else:
+                    # Return 3 waypoints (breakfast run leg count).
+                    content = (
+                        '[{"lat": 51.8, "lng": 5.2}, '
+                        '{"lat": 51.4, "lng": 5.5}, '
+                        '{"lat": 51.1, "lng": 5.8}]'
+                    )
+
+                class _Response:
+                    class _Content:
+                        text = content
+
+                    content = [_Content()]
+
+                return _Response()
+
+        self.messages = _Messages()
+
+
+@pytest.mark.asyncio
+@patch("route_generation.requests.get", side_effect=_mock_sv_coverage_ok)
+async def test_generate_breakfast_run_returns_both_legs(_mock_get):
+    """Breakfast run should produce outbound and return legs."""
+    maps = _MockMapsClient()
+    claude = _MockClaudeClientThereAndBack()
+
+    result = await route_generation.generate(
+        _PREFS_BREAKFAST,
+        maps_client=maps,
+        claude_client=claude,
+    )
+
+    assert result.route_type == "breakfast_run"
+    assert result.destination_name == "Café De Witte Berg"
+    assert result.encoded_polyline  # outbound polyline
+    assert result.return_polyline is not None  # return polyline
+    assert result.return_distance_km is not None
+    assert result.return_duration_min is not None
+    assert result.return_waypoints is not None
+    assert len(result.return_waypoints) > 0
+    assert result.return_street_view_urls is not None
+
+
+@pytest.mark.asyncio
+@patch("route_generation.requests.get", side_effect=_mock_sv_coverage_ok)
+async def test_generate_overnighter_returns_both_legs(_mock_get):
+    """Overnighter should produce outbound and return legs."""
+    maps = _MockMapsClient()
+    claude = _MockClaudeClientThereAndBack()
+
+    result = await route_generation.generate(
+        _PREFS_OVERNIGHTER,
+        maps_client=maps,
+        claude_client=claude,
+    )
+
+    assert result.route_type == "overnighter"
+    assert result.destination_name == "Hotel Limburg"
+    assert result.return_polyline is not None
+
+
+@pytest.mark.asyncio
+@patch("route_generation.requests.get", side_effect=_mock_sv_coverage_ok)
+async def test_generate_day_out_with_area_no_return_leg(_mock_get):
+    """Day out with riding area should still be a single loop (no return leg)."""
+    maps = _MockMapsClient()
+    claude = _MockClaudeClient()
+
+    result = await route_generation.generate(
+        _PREFS_DAY_OUT_AREA,
+        maps_client=maps,
+        claude_client=claude,
+    )
+
+    assert result.route_type == "day_out"
+    assert result.return_polyline is None
+    assert result.return_waypoints is None
+
+
+@pytest.mark.asyncio
+@patch("route_generation.requests.get", side_effect=_mock_sv_coverage_ok)
+async def test_generate_day_out_default_route_type(_mock_get):
+    """Default route_type should be 'day_out' for backward compatibility."""
+    maps = _MockMapsClient()
+    claude = _MockClaudeClient()
+
+    result = await route_generation.generate(
+        _PREFS,
+        maps_client=maps,
+        claude_client=claude,
+    )
+
+    assert result.route_type == "day_out"
+
+
+@pytest.mark.asyncio
+async def test_there_and_back_requires_destination():
+    """breakfast_run without destination coordinates should raise ValueError."""
+    prefs = RoutePreferences(
+        start_location="52.37,4.90",
+        distance_km=100,
+        curviness=3,
+        scenery_type="mixed",
+        loop=False,
+        route_type="breakfast_run",
+        # Missing destination_lat and destination_lng
+    )
+    maps = _MockMapsClient()
+    claude = _MockClaudeClientThereAndBack()
+
+    with pytest.raises(ValueError, match="destination_lat"):
+        await route_generation.generate(prefs, maps_client=maps, claude_client=claude)
+
+
+@pytest.mark.asyncio
+async def test_riding_area_context_in_waypoint_prompt():
+    """Day out with riding area should include area context in the prompt."""
+    maps = _MockMapsClient()
+    claude = _MockClaudeClient()
+
+    result = await route_generation.generate(
+        _PREFS_DAY_OUT_AREA,
+        maps_client=maps,
+        claude_client=claude,
+    )
+
+    # The waypoint generation prompt should mention the riding area.
+    prompt = result.debug.waypoint_generation_prompt
+    assert "South Limburg" in prompt
+    assert "MAJORITY" in prompt
+
+
+def test_route_preferences_new_fields_defaults():
+    """New RoutePreferences fields should have correct defaults."""
+    prefs = RoutePreferences(
+        start_location="52.37,4.90",
+        distance_km=100,
+        curviness=3,
+        scenery_type="mixed",
+        loop=True,
+    )
+    assert prefs.route_type == "day_out"
+    assert prefs.destination_lat is None
+    assert prefs.destination_lng is None
+    assert prefs.destination_name is None
+    assert prefs.riding_area_lat is None
+    assert prefs.riding_area_name is None

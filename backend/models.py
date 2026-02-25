@@ -68,6 +68,30 @@ class RoutePreferences(BaseModel):
     lunch_stop: bool = False
     """Whether to include a restaurant stop at roughly the halfway point."""
 
+    route_type: str = "day_out"
+    """Ride type: 'breakfast_run' | 'day_out' | 'overnighter'."""
+
+    destination_lat: float | None = None
+    """Latitude of the destination (restaurant or hotel)."""
+
+    destination_lng: float | None = None
+    """Longitude of the destination (restaurant or hotel)."""
+
+    destination_name: str | None = None
+    """Name of the destination (restaurant or hotel)."""
+
+    riding_area_lat: float | None = None
+    """Centre latitude of the selected riding area (day_out only)."""
+
+    riding_area_lng: float | None = None
+    """Centre longitude of the selected riding area (day_out only)."""
+
+    riding_area_radius_km: float | None = None
+    """Approximate radius of the riding area in km."""
+
+    riding_area_name: str | None = None
+    """Name of the selected riding area."""
+
 
 class RouteWaypoint(BaseModel):
     """A single waypoint on the generated route."""
@@ -135,3 +159,26 @@ class RouteResult(BaseModel):
     """Street View Static API URLs at 2–3 scenic waypoints."""
 
     debug: GenerationDebug = Field(default_factory=GenerationDebug)
+
+    # -- There-and-back fields (breakfast_run / overnighter) ------------------
+
+    return_polyline: str | None = None
+    """Google-encoded polyline for the return leg (different roads)."""
+
+    return_distance_km: float | None = None
+    """Return leg distance in kilometres."""
+
+    return_duration_min: int | None = None
+    """Return leg estimated duration in minutes."""
+
+    return_waypoints: list[RouteWaypoint] | None = None
+    """Waypoints along the return leg."""
+
+    return_street_view_urls: list[str] | None = None
+    """Street View images for the return leg."""
+
+    route_type: str = "day_out"
+    """The ride type that produced this route."""
+
+    destination_name: str | None = None
+    """Name of the destination (restaurant or hotel), if applicable."""

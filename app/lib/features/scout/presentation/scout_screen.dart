@@ -4,20 +4,30 @@ import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:motomuse/core/routing/app_router.dart';
 import 'package:motomuse/core/theme/app_colors.dart';
+import 'package:motomuse/features/explore/application/explore_providers.dart';
+import 'package:motomuse/features/explore/domain/hotel.dart';
+import 'package:motomuse/features/explore/domain/restaurant.dart';
+import 'package:motomuse/features/explore/domain/riding_location.dart';
 import 'package:motomuse/features/scout/application/scout_providers.dart';
 import 'package:motomuse/features/scout/domain/generated_route.dart';
 import 'package:motomuse/features/scout/domain/route_exception.dart';
 import 'package:motomuse/features/scout/domain/route_preferences.dart';
 
-/// Scout screen — vibe controls for motorcycle route generation.
+/// Scout screen — ride type selector and vibe controls for route generation.
 ///
-/// The user sets distance, curviness, scenery type, loop preference, and
-/// optionally a lunch stop, then taps "Generate my route." While the backend
-/// is working, a full-screen loading state is shown. On success the app
-/// navigates to the route preview screen.
+/// Supports three ride types:
+/// - **Breakfast Run**: Select a restaurant, scenic ride there and back.
+/// - **Day Out**: Select a riding area (optional) or freeform circular route.
+/// - **Overnighter**: Select a hotel, scenic ride there and back.
 class ScoutScreen extends ConsumerStatefulWidget {
   /// Creates the scout screen.
-  const ScoutScreen({super.key});
+  const ScoutScreen({this.prefill, super.key});
+
+  /// Optional pre-fill data from Explore deep links.
+  ///
+  /// Keys: `breakfast_restaurant` (Restaurant), `riding_area` (RidingLocation),
+  /// `overnighter_hotel` (Hotel).
+  final Map<String, dynamic>? prefill;
 
   @override
   ConsumerState<ScoutScreen> createState() => _ScoutScreenState();
@@ -26,6 +36,7 @@ class ScoutScreen extends ConsumerStatefulWidget {
 class _ScoutScreenState extends ConsumerState<ScoutScreen> {
   final _startCtrl = TextEditingController();
   bool _locating = false;
+  bool _prefillApplied = false;
 
   @override
   void initState() {
@@ -34,14 +45,58 @@ class _ScoutScreenState extends ConsumerState<ScoutScreen> {
   }
 
   @override
+  void didUpdateWidget(ScoutScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Apply prefill when navigating from Explore with data.
+    if (widget.prefill != null && !_prefillApplied) {
+      _applyPrefill(widget.prefill!);
+      _prefillApplied = true;
+    }
+  }
+
+  void _applyPrefill(Map<String, dynamic> data) {
+    final notifier = ref.read(routePreferencesProvider.notifier);
+
+    if (data.containsKey('breakfast_restaurant')) {
+      final r = data['breakfast_restaurant'] as Restaurant;
+      notifier.update(
+        (p) => p.copyWith(
+          routeType: 'breakfast_run',
+          destinationLat: () => r.location.latitude,
+          destinationLng: () => r.location.longitude,
+          destinationName: () => r.name,
+        ),
+      );
+    } else if (data.containsKey('riding_area')) {
+      final loc = data['riding_area'] as RidingLocation;
+      notifier.update(
+        (p) => p.copyWith(
+          routeType: 'day_out',
+          ridingAreaLat: () => loc.center.latitude,
+          ridingAreaLng: () => loc.center.longitude,
+          ridingAreaRadiusKm: () => loc.radiusKm,
+          ridingAreaName: () => loc.name,
+        ),
+      );
+    } else if (data.containsKey('overnighter_hotel')) {
+      final h = data['overnighter_hotel'] as Hotel;
+      notifier.update(
+        (p) => p.copyWith(
+          routeType: 'overnighter',
+          destinationLat: () => h.location.latitude,
+          destinationLng: () => h.location.longitude,
+          destinationName: () => h.name,
+        ),
+      );
+    }
+  }
+
+  @override
   void dispose() {
     _startCtrl.dispose();
     super.dispose();
   }
 
-  /// Attempts to resolve the device location and populate the start field with
-  /// a `lat,lng` string. Silently falls back to an empty field so the user can
-  /// type an address manually.
   Future<void> _prefillLocation() async {
     setState(() => _locating = true);
     try {
@@ -77,7 +132,14 @@ class _ScoutScreenState extends ConsumerState<ScoutScreen> {
     final genState = ref.watch(routeGenerationNotifierProvider);
     final isGenerating = genState.isLoading;
 
-    // Navigate to preview on success; show error snackbar on failure.
+    // Apply prefill on first build if not yet applied.
+    if (widget.prefill != null && !_prefillApplied) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _applyPrefill(widget.prefill!);
+        _prefillApplied = true;
+      });
+    }
+
     ref.listen<AsyncValue<GeneratedRoute?>>(
       routeGenerationNotifierProvider,
       (previous, next) {
@@ -110,6 +172,26 @@ class _ScoutScreenState extends ConsumerState<ScoutScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // Ride type selector.
+              _SectionLabel(label: 'Ride type', theme: theme),
+              const SizedBox(height: 8),
+              _RideTypeSelector(
+                value: prefs.routeType,
+                onChanged: _onRideTypeChanged,
+              ),
+              const SizedBox(height: 20),
+
+              // Type-specific content.
+              if (prefs.routeType == 'breakfast_run')
+                _BreakfastRunControls(prefs: prefs)
+              else if (prefs.routeType == 'overnighter')
+                _OvernighterControls(prefs: prefs)
+              else
+                _DayOutControls(prefs: prefs),
+
+              const SizedBox(height: 20),
+
+              // Starting location (always shown).
               _SectionLabel(label: 'Starting from', theme: theme),
               const SizedBox(height: 8),
               TextField(
@@ -125,32 +207,9 @@ class _ScoutScreenState extends ConsumerState<ScoutScreen> {
                     .read(routePreferencesProvider.notifier)
                     .update((p) => p.copyWith(startLocation: v)),
               ),
-              const SizedBox(height: 28),
-              _SectionLabel(label: 'Distance', theme: theme),
-              const SizedBox(height: 4),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('30 km', style: theme.textTheme.bodySmall),
-                  Text(
-                    '${prefs.distanceKm} km',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  Text('300 km', style: theme.textTheme.bodySmall),
-                ],
-              ),
-              Slider(
-                value: prefs.distanceKm.toDouble(),
-                min: 30,
-                max: 300,
-                divisions: 54, // 5 km steps
-                onChanged: (v) => ref
-                    .read(routePreferencesProvider.notifier)
-                    .update((p) => p.copyWith(distanceKm: v.round())),
-              ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
+
+              // Curviness (always shown).
               _SectionLabel(label: 'Curviness', theme: theme),
               const SizedBox(height: 8),
               _CurvinessSelector(
@@ -159,7 +218,9 @@ class _ScoutScreenState extends ConsumerState<ScoutScreen> {
                     .read(routePreferencesProvider.notifier)
                     .update((p) => p.copyWith(curviness: v)),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
+
+              // Scenery (always shown).
               _SectionLabel(label: 'Scenery', theme: theme),
               const SizedBox(height: 8),
               _ScenerySelector(
@@ -168,37 +229,89 @@ class _ScoutScreenState extends ConsumerState<ScoutScreen> {
                     .read(routePreferencesProvider.notifier)
                     .update((p) => p.copyWith(sceneryType: v)),
               ),
-              const SizedBox(height: 24),
-              _SectionLabel(label: 'Route type', theme: theme),
-              const SizedBox(height: 8),
-              _RouteTypeToggle(
-                loop: prefs.loop,
-                onLoopChanged: ({required bool loop}) => ref
-                    .read(routePreferencesProvider.notifier)
-                    .update((p) => p.copyWith(loop: loop)),
-              ),
-              const SizedBox(height: 16),
-              SwitchListTile(
-                value: prefs.lunchStop,
-                onChanged: (v) => ref
-                    .read(routePreferencesProvider.notifier)
-                    .update((p) => p.copyWith(lunchStop: v)),
-                title: const Text('Add a lunch stop'),
-                subtitle:
-                    const Text('Include a restaurant at the halfway point'),
-                contentPadding: EdgeInsets.zero,
-              ),
+
+              // Distance slider (day_out only).
+              if (prefs.routeType == 'day_out') ...[
+                const SizedBox(height: 20),
+                _SectionLabel(label: 'Distance', theme: theme),
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('30 km', style: theme.textTheme.bodySmall),
+                    Text(
+                      '${prefs.distanceKm} km',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    Text('300 km', style: theme.textTheme.bodySmall),
+                  ],
+                ),
+                Slider(
+                  value: prefs.distanceKm.toDouble(),
+                  min: 30,
+                  max: 300,
+                  divisions: 54,
+                  onChanged: (v) => ref
+                      .read(routePreferencesProvider.notifier)
+                      .update((p) => p.copyWith(distanceKm: v.round())),
+                ),
+              ],
+
+              // Loop toggle (day_out without area only).
+              if (prefs.routeType == 'day_out' &&
+                  prefs.ridingAreaName == null) ...[
+                const SizedBox(height: 16),
+                _SectionLabel(label: 'Route shape', theme: theme),
+                const SizedBox(height: 8),
+                _RouteTypeToggle(
+                  loop: prefs.loop,
+                  onLoopChanged: ({required bool loop}) => ref
+                      .read(routePreferencesProvider.notifier)
+                      .update((p) => p.copyWith(loop: loop)),
+                ),
+              ],
+
               const SizedBox(height: 32),
               FilledButton.icon(
                 onPressed: () => _generate(prefs),
                 icon: const Icon(Icons.route_outlined),
-                label: const Text('Generate my route'),
+                label: Text(_generateButtonLabel(prefs.routeType)),
               ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  void _onRideTypeChanged(String type) {
+    ref.read(routePreferencesProvider.notifier).update(
+          (p) => p.copyWith(
+            routeType: type,
+            // Clear destination/area when switching types.
+            destinationLat: () => null,
+            destinationLng: () => null,
+            destinationName: () => null,
+            ridingAreaLat: () => null,
+            ridingAreaLng: () => null,
+            ridingAreaRadiusKm: () => null,
+            ridingAreaName: () => null,
+            loop: type == 'day_out',
+          ),
+        );
+  }
+
+  String _generateButtonLabel(String routeType) {
+    switch (routeType) {
+      case 'breakfast_run':
+        return 'Plan my breakfast run';
+      case 'overnighter':
+        return 'Plan my overnighter';
+      default:
+        return 'Generate my route';
+    }
   }
 
   void _generate(RoutePreferences prefs) {
@@ -208,15 +321,246 @@ class _ScoutScreenState extends ConsumerState<ScoutScreen> {
 
     if (location.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter a starting location.'),
-        ),
+        const SnackBar(content: Text('Please enter a starting location.')),
+      );
+      return;
+    }
+
+    if (prefs.isThereAndBack && prefs.destinationLat == null) {
+      final item =
+          prefs.routeType == 'breakfast_run' ? 'restaurant' : 'hotel';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Please select a $item.')),
       );
       return;
     }
 
     final effective = prefs.copyWith(startLocation: location);
     ref.read(routeGenerationNotifierProvider.notifier).generate(effective);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Ride type selector
+// ---------------------------------------------------------------------------
+
+class _RideTypeSelector extends StatelessWidget {
+  const _RideTypeSelector({required this.value, required this.onChanged});
+
+  final String value;
+  final void Function(String) onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SegmentedButton<String>(
+      segments: const [
+        ButtonSegment(
+          value: 'breakfast_run',
+          label: Text('Breakfast'),
+          icon: Icon(Icons.coffee_outlined, size: 18),
+        ),
+        ButtonSegment(
+          value: 'day_out',
+          label: Text('Day Out'),
+          icon: Icon(Icons.two_wheeler_outlined, size: 18),
+        ),
+        ButtonSegment(
+          value: 'overnighter',
+          label: Text('Overnighter'),
+          icon: Icon(Icons.bedtime_outlined, size: 18),
+        ),
+      ],
+      selected: {value},
+      onSelectionChanged: (s) => onChanged(s.first),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Breakfast Run controls
+// ---------------------------------------------------------------------------
+
+class _BreakfastRunControls extends ConsumerWidget {
+  const _BreakfastRunControls({required this.prefs});
+
+  final RoutePreferences prefs;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final restaurantsAsync = ref.watch(restaurantsProvider);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionLabel(label: 'Destination restaurant', theme: theme),
+        const SizedBox(height: 8),
+        if (prefs.destinationName != null)
+          _SelectedChip(
+            icon: Icons.restaurant,
+            label: prefs.destinationName!,
+            onClear: () => ref
+                .read(routePreferencesProvider.notifier)
+                .update(
+                  (p) => p.copyWith(
+                    destinationLat: () => null,
+                    destinationLng: () => null,
+                    destinationName: () => null,
+                  ),
+                ),
+          )
+        else
+          restaurantsAsync.when(
+            data: (restaurants) => _DropdownPicker<Restaurant>(
+              hint: 'Select a restaurant',
+              items: restaurants,
+              labelBuilder: (r) => '${r.name} (${r.ridingLocationName})',
+              onSelected: (r) => ref
+                  .read(routePreferencesProvider.notifier)
+                  .update(
+                    (p) => p.copyWith(
+                      destinationLat: () => r.location.latitude,
+                      destinationLng: () => r.location.longitude,
+                      destinationName: () => r.name,
+                    ),
+                  ),
+            ),
+            loading: () => const LinearProgressIndicator(),
+            error: (e, _) => Text('Could not load restaurants: $e'),
+          ),
+        const SizedBox(height: 8),
+        Text(
+          '1-2 hour scenic ride each way, different roads out and back.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Day Out controls
+// ---------------------------------------------------------------------------
+
+class _DayOutControls extends ConsumerWidget {
+  const _DayOutControls({required this.prefs});
+
+  final RoutePreferences prefs;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final locationsAsync = ref.watch(ridingLocationsProvider);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionLabel(label: 'Riding area (optional)', theme: theme),
+        const SizedBox(height: 8),
+        if (prefs.ridingAreaName != null)
+          _SelectedChip(
+            icon: Icons.landscape,
+            label: prefs.ridingAreaName!,
+            onClear: () => ref
+                .read(routePreferencesProvider.notifier)
+                .update(
+                  (p) => p.copyWith(
+                    ridingAreaLat: () => null,
+                    ridingAreaLng: () => null,
+                    ridingAreaRadiusKm: () => null,
+                    ridingAreaName: () => null,
+                  ),
+                ),
+          )
+        else
+          locationsAsync.when(
+            data: (locations) => _DropdownPicker<RidingLocation>(
+              hint: 'Any area (freeform route)',
+              items: locations,
+              labelBuilder: (loc) => loc.name,
+              onSelected: (loc) => ref
+                  .read(routePreferencesProvider.notifier)
+                  .update(
+                    (p) => p.copyWith(
+                      ridingAreaLat: () => loc.center.latitude,
+                      ridingAreaLng: () => loc.center.longitude,
+                      ridingAreaRadiusKm: () => loc.radiusKm,
+                      ridingAreaName: () => loc.name,
+                      loop: true,
+                    ),
+                  ),
+            ),
+            loading: () => const LinearProgressIndicator(),
+            error: (e, _) => Text('Could not load locations: $e'),
+          ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Overnighter controls
+// ---------------------------------------------------------------------------
+
+class _OvernighterControls extends ConsumerWidget {
+  const _OvernighterControls({required this.prefs});
+
+  final RoutePreferences prefs;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final hotelsAsync = ref.watch(hotelsProvider);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionLabel(label: 'Destination hotel', theme: theme),
+        const SizedBox(height: 8),
+        if (prefs.destinationName != null)
+          _SelectedChip(
+            icon: Icons.hotel,
+            label: prefs.destinationName!,
+            onClear: () => ref
+                .read(routePreferencesProvider.notifier)
+                .update(
+                  (p) => p.copyWith(
+                    destinationLat: () => null,
+                    destinationLng: () => null,
+                    destinationName: () => null,
+                  ),
+                ),
+          )
+        else
+          hotelsAsync.when(
+            data: (hotels) => _DropdownPicker<Hotel>(
+              hint: 'Select a hotel',
+              items: hotels,
+              labelBuilder: (h) => '${h.name} (${h.ridingLocationName})',
+              onSelected: (h) => ref
+                  .read(routePreferencesProvider.notifier)
+                  .update(
+                    (p) => p.copyWith(
+                      destinationLat: () => h.location.latitude,
+                      destinationLng: () => h.location.longitude,
+                      destinationName: () => h.name,
+                    ),
+                  ),
+            ),
+            loading: () => const LinearProgressIndicator(),
+            error: (e, _) => Text('Could not load hotels: $e'),
+          ),
+        const SizedBox(height: 8),
+        Text(
+          '4-6 hour scenic ride each way, different roads out and back.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -265,7 +609,7 @@ class _GeneratingState extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Sub-widgets
+// Shared sub-widgets
 // ---------------------------------------------------------------------------
 
 class _SectionLabel extends StatelessWidget {
@@ -374,6 +718,71 @@ class _RouteTypeToggle extends StatelessWidget {
       ],
       selected: {loop},
       onSelectionChanged: (s) => onLoopChanged(loop: s.first),
+    );
+  }
+}
+
+/// A chip showing the currently selected destination/area with a clear button.
+class _SelectedChip extends StatelessWidget {
+  const _SelectedChip({
+    required this.icon,
+    required this.label,
+    required this.onClear,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return InputChip(
+      avatar: Icon(icon, size: 18),
+      label: Text(label),
+      onDeleted: onClear,
+      deleteIcon: const Icon(Icons.close, size: 16),
+    );
+  }
+}
+
+/// Generic dropdown picker that shows a list of items.
+class _DropdownPicker<T> extends StatelessWidget {
+  const _DropdownPicker({
+    required this.hint,
+    required this.items,
+    required this.labelBuilder,
+    required this.onSelected,
+    super.key,
+  });
+
+  final String hint;
+  final List<T> items;
+  final String Function(T) labelBuilder;
+  final void Function(T) onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return DropdownButtonFormField<T>(
+      decoration: InputDecoration(
+        border: const OutlineInputBorder(),
+        hintText: hint,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      ),
+      isExpanded: true,
+      items: items
+          .map(
+            (item) => DropdownMenuItem<T>(
+              value: item,
+              child: Text(
+                labelBuilder(item),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          )
+          .toList(),
+      onChanged: (value) {
+        if (value != null) onSelected(value);
+      },
     );
   }
 }

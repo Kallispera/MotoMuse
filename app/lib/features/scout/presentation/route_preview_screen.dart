@@ -7,12 +7,9 @@ import 'package:motomuse/features/scout/domain/generated_route.dart';
 
 /// Displays a generated motorcycle route on a map with narrative and imagery.
 ///
-/// Shows:
-/// - A Google Map occupying the top 40% of the screen, with the route polyline
-/// - Distance and estimated duration
-/// - Horizontal scrollable Street View images at scenic waypoints
-/// - LLM-generated route narrative
-/// - A "Start riding" placeholder button (navigation deferred to Phase 4)
+/// Supports both single-leg (day out) and two-leg (breakfast run /
+/// overnighter) routes. Two-leg routes show outbound and return polylines
+/// in different colors.
 class RoutePreviewScreen extends StatefulWidget {
   /// Creates the route preview screen.
   const RoutePreviewScreen({required this.route, super.key});
@@ -37,18 +34,32 @@ class _RoutePreviewScreenState extends State<RoutePreviewScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final accentColor = isDark ? AppColors.gold : AppColors.amber;
+    final outboundColor = isDark ? AppColors.gold : AppColors.amber;
+    const returnColor = Colors.blueGrey;
 
-    final polylinePoints = _decodePolyline(widget.route.encodedPolyline);
+    final outboundPoints = _decodePolyline(widget.route.encodedPolyline);
+    final returnPoints = widget.route.returnPolyline != null
+        ? _decodePolyline(widget.route.returnPolyline!)
+        : <LatLng>[];
+
+    final allPoints = [...outboundPoints, ...returnPoints];
     final bounds = _boundsFromPoints(
-      polylinePoints.isNotEmpty ? polylinePoints : widget.route.waypoints,
+      allPoints.isNotEmpty ? allPoints : widget.route.waypoints,
     );
 
+    // Combine Street View URLs from both legs.
+    final allStreetViewUrls = [
+      ...widget.route.streetViewUrls,
+      ...?widget.route.returnStreetViewUrls,
+    ];
+
+    final title = _routeTitle;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Your route')),
+      appBar: AppBar(title: Text(title)),
       body: Column(
         children: [
-          // ── Map ──────────────────────────────────────────────────────────
+          // -- Map ----------------------------------------------------------
           SizedBox(
             height: MediaQuery.of(context).size.height * 0.4,
             child: GoogleMap(
@@ -66,13 +77,21 @@ class _RoutePreviewScreenState extends State<RoutePreviewScreen> {
               },
               polylines: {
                 Polyline(
-                  polylineId: const PolylineId('route'),
-                  points: polylinePoints.isNotEmpty
-                      ? polylinePoints
+                  polylineId: const PolylineId('outbound'),
+                  points: outboundPoints.isNotEmpty
+                      ? outboundPoints
                       : widget.route.waypoints,
-                  color: accentColor,
+                  color: outboundColor,
                   width: 4,
                 ),
+                if (returnPoints.isNotEmpty)
+                  Polyline(
+                    polylineId: const PolylineId('return'),
+                    points: returnPoints,
+                    color: returnColor,
+                    width: 4,
+                    patterns: [PatternItem.dash(20), PatternItem.gap(10)],
+                  ),
               },
               myLocationButtonEnabled: false,
               zoomControlsEnabled: false,
@@ -80,51 +99,60 @@ class _RoutePreviewScreenState extends State<RoutePreviewScreen> {
             ),
           ),
 
-          // ── Scrollable detail card ───────────────────────────────────────
+          // -- Scrollable detail card ---------------------------------------
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Stats row
-                  Row(
-                    children: [
-                      const Icon(Icons.two_wheeler, size: 20),
-                      const SizedBox(width: 8),
-                      Text(
-                        '${widget.route.distanceKm.round()} km',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
+                  // Destination name for there-and-back routes.
+                  if (widget.route.destinationName != null) ...[
+                    Text(
+                      _destinationLabel,
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
                       ),
-                      const SizedBox(width: 4),
-                      Text('·', style: theme.textTheme.titleMedium),
-                      const SizedBox(width: 4),
-                      Text(
-                        _formatDuration(widget.route.durationMin),
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+
+                  // Stats — outbound leg.
+                  _StatsRow(
+                    label: widget.route.isThereAndBack ? 'Outbound' : null,
+                    distanceKm: widget.route.distanceKm,
+                    durationMin: widget.route.durationMin,
+                    color: outboundColor,
                   ),
 
-                  // Street View images
-                  if (widget.route.streetViewUrls.isNotEmpty) ...[
+                  // Stats — return leg (there-and-back only).
+                  if (widget.route.isThereAndBack &&
+                      widget.route.returnDistanceKm != null) ...[
+                    const SizedBox(height: 6),
+                    _StatsRow(
+                      label: 'Return',
+                      distanceKm: widget.route.returnDistanceKm!,
+                      durationMin: widget.route.returnDurationMin ?? 0,
+                      color: returnColor,
+                    ),
+                  ],
+
+                  // Street View images (combined from both legs).
+                  if (allStreetViewUrls.isNotEmpty) ...[
                     const SizedBox(height: 20),
                     SizedBox(
                       height: 140,
                       child: ListView.separated(
                         scrollDirection: Axis.horizontal,
-                        itemCount: widget.route.streetViewUrls.length,
-                        separatorBuilder: (_, __) => const SizedBox(width: 10),
+                        itemCount: allStreetViewUrls.length,
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(width: 10),
                         itemBuilder: (context, i) => ClipRRect(
                           borderRadius: BorderRadius.circular(10),
                           child: AspectRatio(
                             aspectRatio: 4 / 3,
                             child: Image.network(
-                              widget.route.streetViewUrls[i],
+                              allStreetViewUrls[i],
                               fit: BoxFit.cover,
                               errorBuilder: (_, __, ___) => ColoredBox(
                                 color: Colors.grey.shade200,
@@ -140,23 +168,59 @@ class _RoutePreviewScreenState extends State<RoutePreviewScreen> {
                     ),
                   ],
 
-                  // Narrative
+                  // Narrative.
                   if (widget.route.narrative.isNotEmpty) ...[
                     const SizedBox(height: 20),
                     Text(
                       widget.route.narrative,
-                      style: theme.textTheme.bodyLarge?.copyWith(height: 1.6),
+                      style:
+                          theme.textTheme.bodyLarge?.copyWith(height: 1.6),
+                    ),
+                  ],
+
+                  // Legend for two-leg routes.
+                  if (widget.route.isThereAndBack) ...[
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Container(
+                          width: 24,
+                          height: 3,
+                          color: outboundColor,
+                        ),
+                        const SizedBox(width: 6),
+                        Text('Outbound',
+                            style: theme.textTheme.bodySmall),
+                        const SizedBox(width: 16),
+                        Container(
+                          width: 24,
+                          height: 3,
+                          decoration: const BoxDecoration(
+                            border: Border(
+                              bottom: BorderSide(
+                                color: returnColor,
+                                width: 3,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text('Return',
+                            style: theme.textTheme.bodySmall),
+                      ],
                     ),
                   ],
 
                   const SizedBox(height: 28),
 
-                  // Start riding (placeholder — navigation in Phase 4)
+                  // Start riding (placeholder — navigation in Phase 4).
                   FilledButton.icon(
                     onPressed: () {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('Turn-by-turn navigation coming soon.'),
+                          content: Text(
+                            'Turn-by-turn navigation coming soon.',
+                          ),
                         ),
                       );
                     },
@@ -172,13 +236,33 @@ class _RoutePreviewScreenState extends State<RoutePreviewScreen> {
     );
   }
 
+  String get _routeTitle {
+    switch (widget.route.routeType) {
+      case 'breakfast_run':
+        return 'Breakfast run';
+      case 'overnighter':
+        return 'Overnighter';
+      default:
+        return 'Your route';
+    }
+  }
+
+  String get _destinationLabel {
+    final name = widget.route.destinationName ?? '';
+    switch (widget.route.routeType) {
+      case 'breakfast_run':
+        return 'Breakfast at $name';
+      case 'overnighter':
+        return 'Staying at $name';
+      default:
+        return name;
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
 
-  /// Decodes a Google-encoded polyline string to a list of [LatLng] points.
-  ///
-  /// Implements the standard Google polyline encoding algorithm.
   List<LatLng> _decodePolyline(String encoded) {
     final result = <LatLng>[];
     var index = 0;
@@ -232,6 +316,53 @@ class _RoutePreviewScreenState extends State<RoutePreviewScreen> {
     return LatLngBounds(
       southwest: LatLng(minLat, minLng),
       northeast: LatLng(maxLat, maxLng),
+    );
+  }
+}
+
+class _StatsRow extends StatelessWidget {
+  const _StatsRow({
+    required this.distanceKm,
+    required this.durationMin,
+    required this.color,
+    this.label,
+  });
+
+  final String? label;
+  final double distanceKm;
+  final int durationMin;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        if (label != null) ...[
+          Text(
+            label!,
+            style: theme.textTheme.bodySmall?.copyWith(color: color),
+          ),
+          const SizedBox(width: 8),
+        ],
+        Icon(Icons.two_wheeler, size: 20, color: color),
+        const SizedBox(width: 8),
+        Text(
+          '${distanceKm.round()} km',
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text('·', style: theme.textTheme.titleMedium),
+        const SizedBox(width: 4),
+        Text(
+          _formatDuration(durationMin),
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
     );
   }
 

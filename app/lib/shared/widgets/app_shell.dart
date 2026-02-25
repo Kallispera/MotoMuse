@@ -28,6 +28,12 @@ class AppShell extends StatelessWidget {
       route: AppRoutes.scout,
     ),
     _TabItem(
+      label: 'Explore',
+      icon: Icons.explore_outlined,
+      activeIcon: Icons.explore,
+      route: AppRoutes.explore,
+    ),
+    _TabItem(
       label: 'Profile',
       icon: Icons.person_outline,
       activeIcon: Icons.person,
@@ -38,7 +44,8 @@ class AppShell extends StatelessWidget {
   int _currentIndex(BuildContext context) {
     final location = GoRouterState.of(context).uri.toString();
     if (location.startsWith(AppRoutes.scout)) return 1;
-    if (location.startsWith(AppRoutes.profile)) return 2;
+    if (location.startsWith(AppRoutes.explore)) return 2;
+    if (location.startsWith(AppRoutes.profile)) return 3;
     return 0; // garage is default
   }
 
@@ -50,6 +57,7 @@ class AppShell extends StatelessWidget {
       body: TexturedBackground(child: child),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: currentIndex,
+        type: BottomNavigationBarType.fixed,
         onTap: (index) => context.go(_tabs[index].route),
         items: _tabs
             .map(

@@ -148,12 +148,19 @@ async def generate(
     )
 
     logger.info(
-        "Route generation started: %s, %dkm, curviness=%d, loop=%s",
+        "Route generation started: %s, %dkm, curviness=%d, loop=%s, type=%s",
         prefs.start_location,
         prefs.distance_km,
         prefs.curviness,
         prefs.loop,
+        prefs.route_type,
     )
+
+    # Dispatch to there-and-back pipeline for breakfast runs and overnighters.
+    if prefs.route_type in ("breakfast_run", "overnighter"):
+        return await _generate_there_and_back(_maps, _claude, api_key, prefs)
+
+    # -- Day Out pipeline (existing behaviour, with optional riding area) ----
 
     # Step 1: Geocode start location.
     start_lat, start_lng = await _geocode(_maps, prefs.start_location)
@@ -282,7 +289,375 @@ async def generate(
         narrative=narrative,
         street_view_urls=street_view_urls,
         debug=debug,
+        route_type=prefs.route_type,
     )
+
+
+# ---------------------------------------------------------------------------
+# There-and-back route generation (breakfast run / overnighter)
+# ---------------------------------------------------------------------------
+
+# Waypoint counts for there-and-back legs — fewer than a full loop because
+# each leg is shorter (1-2h for breakfast, 4-6h for overnighter).
+_BREAKFAST_WAYPOINT_COUNT: int = 3
+_OVERNIGHTER_WAYPOINT_COUNT: int = 4
+
+_THERE_AND_BACK_PROMPT = """\
+You are planning a motorcycle route.
+
+Start: {start_region} (coordinates: {start_lat}, {start_lng})
+Destination: {dest_name} (coordinates: {dest_lat}, {dest_lng})
+
+Route requirements:
+- This is the {leg_label} of a {ride_type} motorcycle trip
+- Curviness preference: {curviness}/5 (1=relaxed straight roads, 5=maximum twisties)
+- Scenery type: {scenery_type}
+- The ride should be scenic and enjoyable — avoid the most direct route
+
+Generate exactly {n_waypoints} intermediate waypoints between start and \
+destination, in riding order. Do NOT include the start or destination in your \
+waypoints — they will be added automatically.
+
+{avoid_roads_context}
+
+CRITICAL RULES:
+1. Every waypoint MUST be on or within 100m of a real, paved road.
+2. NEVER place a waypoint in water (lakes, seas, rivers).
+3. NEVER place a waypoint in a city centre (pop > 50,000).
+4. Consecutive waypoints must be connectable via rural roads without passing \
+through major cities or crossing large water bodies.
+5. Waypoints should progress from start toward destination — not loop or backtrack.
+6. Prefer scenic motorcycle-friendly roads: mountain passes, coastal roads, \
+forest routes, dyke roads, country lanes.
+7. Think about the ROUTE BETWEEN waypoints — force the route onto interesting \
+roads rather than highways.
+8. NEVER place a waypoint at a dead-end road or cul-de-sac.
+
+Return ONLY a JSON array of {n_waypoints} waypoints: \
+[{{"lat": ..., "lng": ...}}, ...]
+"""
+
+
+async def _generate_there_and_back(
+    maps_client: googlemaps.Client,
+    claude_client: AsyncAnthropic,
+    api_key: str,
+    prefs: RoutePreferences,
+) -> RouteResult:
+    """Generates a there-and-back route (breakfast run or overnighter).
+
+    Produces two legs on different roads:
+    1. Outbound: start → destination (scenic route)
+    2. Return: destination → start (different scenic route)
+    """
+    if prefs.destination_lat is None or prefs.destination_lng is None:
+        raise ValueError(
+            f"destination_lat and destination_lng required for {prefs.route_type}"
+        )
+
+    # Step 1: Geocode start.
+    start_lat, start_lng = await _geocode(maps_client, prefs.start_location)
+    start_region = _reverse_geocode_region(maps_client, start_lat, start_lng)
+    dest_name = prefs.destination_name or (
+        f"{prefs.destination_lat:.4f},{prefs.destination_lng:.4f}"
+    )
+
+    n_waypoints = (
+        _BREAKFAST_WAYPOINT_COUNT
+        if prefs.route_type == "breakfast_run"
+        else _OVERNIGHTER_WAYPOINT_COUNT
+    )
+    ride_label = (
+        "breakfast run" if prefs.route_type == "breakfast_run" else "overnighter"
+    )
+
+    logger.info(
+        "There-and-back %s: %s → %s", ride_label, start_region, dest_name
+    )
+
+    # -- Outbound leg -------------------------------------------------------
+    outbound_wps, out_prompt = await _generate_leg_waypoints(
+        claude_client,
+        start_lat, start_lng, start_region,
+        prefs.destination_lat, prefs.destination_lng, dest_name,
+        n_waypoints=n_waypoints,
+        curviness=prefs.curviness,
+        scenery_type=prefs.scenery_type,
+        ride_type=ride_label,
+        leg_label="outbound leg",
+        avoid_roads_context="",
+    )
+    logger.info("Outbound: %d waypoints generated", len(outbound_wps))
+
+    # Build a one-way prefs for the outbound leg validation.
+    out_prefs = RoutePreferences(
+        start_location=prefs.start_location,
+        distance_km=prefs.distance_km,
+        curviness=prefs.curviness,
+        scenery_type=prefs.scenery_type,
+        loop=False,
+        route_type=prefs.route_type,
+        destination_lat=prefs.destination_lat,
+        destination_lng=prefs.destination_lng,
+        destination_name=prefs.destination_name,
+    )
+
+    out_dir, out_debug = await _run_validation_loop(
+        maps_client, claude_client,
+        start_lat, start_lng, start_region,
+        prefs.destination_lat, prefs.destination_lng,
+        outbound_wps, out_prefs, out_prompt,
+    )
+
+    # Extract outbound route summary for the return leg's "avoid" context.
+    outbound_summary = ""
+    if out_dir is not None:
+        outbound_summary = _extract_route_summary(out_dir)
+
+    # -- Return leg ---------------------------------------------------------
+    dest_region = _reverse_geocode_region(
+        maps_client, prefs.destination_lat, prefs.destination_lng
+    )
+
+    avoid_context = ""
+    if outbound_summary:
+        avoid_context = (
+            "IMPORTANT: The outbound route used these roads:\n"
+            f"{outbound_summary}\n\n"
+            "You MUST use COMPLETELY DIFFERENT roads for the return leg. "
+            "Do not retrace any of the outbound route."
+        )
+
+    return_wps, ret_prompt = await _generate_leg_waypoints(
+        claude_client,
+        prefs.destination_lat, prefs.destination_lng, dest_region,
+        start_lat, start_lng, start_region,
+        n_waypoints=n_waypoints,
+        curviness=prefs.curviness,
+        scenery_type=prefs.scenery_type,
+        ride_type=ride_label,
+        leg_label="return leg",
+        avoid_roads_context=avoid_context,
+    )
+    logger.info("Return: %d waypoints generated", len(return_wps))
+
+    ret_prefs = RoutePreferences(
+        start_location=f"{prefs.destination_lat},{prefs.destination_lng}",
+        distance_km=prefs.distance_km,
+        curviness=prefs.curviness,
+        scenery_type=prefs.scenery_type,
+        loop=False,
+        route_type=prefs.route_type,
+    )
+
+    ret_dir, ret_debug = await _run_validation_loop(
+        maps_client, claude_client,
+        prefs.destination_lat, prefs.destination_lng, dest_region,
+        start_lat, start_lng,
+        return_wps, ret_prefs, ret_prompt,
+    )
+
+    # -- Narrative covering both legs ---------------------------------------
+    narrative, narrative_prompt = await _generate_there_and_back_narrative(
+        claude_client, out_dir, ret_dir, prefs, dest_name,
+    )
+    out_debug.narrative_prompt = narrative_prompt
+
+    # -- Street View images -------------------------------------------------
+    out_polyline = _build_detailed_polyline(out_dir) if out_dir else ""
+    ret_polyline = _build_detailed_polyline(ret_dir) if ret_dir else ""
+
+    out_sv = _get_street_view_urls(
+        out_dir.get("key_waypoints", outbound_wps[:3]) if out_dir else [],
+        api_key,
+        overview_polyline=out_polyline,
+    )
+    ret_sv = _get_street_view_urls(
+        ret_dir.get("key_waypoints", return_wps[:3]) if ret_dir else [],
+        api_key,
+        overview_polyline=ret_polyline,
+    )
+
+    # -- Assemble result ----------------------------------------------------
+    out_km, out_min = _sum_legs(out_dir) if out_dir else (0, 0)
+    ret_km, ret_min = _sum_legs(ret_dir) if ret_dir else (0, 0)
+
+    return RouteResult(
+        encoded_polyline=out_polyline,
+        distance_km=round(out_km, 1),
+        duration_min=out_min,
+        waypoints=[RouteWaypoint(lat=lat, lng=lng) for lat, lng in outbound_wps],
+        narrative=narrative,
+        street_view_urls=out_sv,
+        debug=out_debug,
+        return_polyline=ret_polyline,
+        return_distance_km=round(ret_km, 1),
+        return_duration_min=ret_min,
+        return_waypoints=[RouteWaypoint(lat=lat, lng=lng) for lat, lng in return_wps],
+        return_street_view_urls=ret_sv,
+        route_type=prefs.route_type,
+        destination_name=dest_name,
+    )
+
+
+async def _generate_leg_waypoints(
+    claude_client: AsyncAnthropic,
+    start_lat: float,
+    start_lng: float,
+    start_region: str,
+    dest_lat: float,
+    dest_lng: float,
+    dest_name: str,
+    *,
+    n_waypoints: int,
+    curviness: int,
+    scenery_type: str,
+    ride_type: str,
+    leg_label: str,
+    avoid_roads_context: str,
+) -> tuple[list[tuple[float, float]], str]:
+    """Generates waypoints for a single leg of a there-and-back route."""
+    prompt = _THERE_AND_BACK_PROMPT.format(
+        start_region=start_region,
+        start_lat=start_lat,
+        start_lng=start_lng,
+        dest_name=dest_name,
+        dest_lat=dest_lat,
+        dest_lng=dest_lng,
+        leg_label=leg_label,
+        ride_type=ride_type,
+        curviness=curviness,
+        scenery_type=scenery_type,
+        n_waypoints=n_waypoints,
+        avoid_roads_context=avoid_roads_context,
+    )
+
+    response = await claude_client.messages.create(
+        model=ROUTE_MODEL,
+        max_tokens=512,
+        system=_JSON_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = response.content[0].text.strip()
+
+    parsed = _extract_json_array(raw)
+    if parsed is not None:
+        try:
+            return [(float(p["lat"]), float(p["lng"])) for p in parsed], prompt
+        except (KeyError, TypeError, ValueError):
+            logger.warning("Leg waypoint JSON missing lat/lng: %s", raw[:200])
+
+    raise ValueError("Claude did not return valid waypoint JSON for leg.")
+
+
+async def _run_validation_loop(
+    maps_client: googlemaps.Client,
+    claude_client: AsyncAnthropic,
+    start_lat: float,
+    start_lng: float,
+    start_region: str,
+    dest_lat: float,
+    dest_lng: float,
+    waypoints: list[tuple[float, float]],
+    prefs: RoutePreferences,
+    initial_prompt: str,
+) -> tuple[dict[str, Any] | None, GenerationDebug]:
+    """Runs the build → validate → retry loop for a single route leg.
+
+    For one-way legs: origin = start, destination = dest, waypoints = intermediate.
+    Returns (directions_result, debug_info).
+    """
+    debug = GenerationDebug()
+    debug.waypoint_generation_prompt = initial_prompt
+    debug.original_waypoints = [
+        {"lat": lat, "lng": lng} for lat, lng in waypoints
+    ]
+
+    selected = list(waypoints)
+    directions_result = None
+    last_issues: list[str] = []
+    all_snapped: list[SnappedWaypointInfo] = []
+
+    for attempt in range(MAX_ROUTE_ATTEMPTS):
+        # Build directions: origin → waypoints → destination.
+        origin = f"{start_lat},{start_lng}"
+        destination = f"{dest_lat},{dest_lng}"
+        wp_strs = [f"{lat},{lng}" for lat, lng in selected]
+
+        try:
+            result = maps_client.directions(
+                origin=origin,
+                destination=destination,
+                waypoints=wp_strs,
+                mode="driving",
+                avoid=["highways", "tolls"],
+                optimize_waypoints=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Directions API error (leg): %s", exc)
+            last_issues = [f"Directions API error: {exc}"]
+            debug.validation_history.append(DebugAttempt(
+                attempt=attempt + 1, issues=list(last_issues),
+            ))
+            continue
+
+        if not result:
+            last_issues = ["Directions API returned no routes."]
+            debug.validation_history.append(DebugAttempt(
+                attempt=attempt + 1, issues=list(last_issues),
+            ))
+            continue
+
+        directions_result = result[0]
+        last_issues = _validate_route(result)
+
+        route_summary = _extract_route_summary(directions_result)
+        debug.validation_history.append(DebugAttempt(
+            attempt=attempt + 1,
+            issues=list(last_issues),
+            route_summary=route_summary,
+            waypoints=[{"lat": lat, "lng": lng} for lat, lng in selected],
+        ))
+
+        # Attach key waypoints for Street View selection.
+        n = len(selected)
+        if n <= STREET_VIEW_IMAGE_COUNT:
+            directions_result["key_waypoints"] = list(selected)
+        else:
+            idxs = [
+                round(i * (n - 1) / (STREET_VIEW_IMAGE_COUNT - 1))
+                for i in range(STREET_VIEW_IMAGE_COUNT)
+            ]
+            directions_result["key_waypoints"] = [selected[i] for i in idxs]
+
+        if not last_issues:
+            logger.info("Leg passed validation on attempt %d", attempt + 1)
+            break
+
+        logger.warning(
+            "Leg attempt %d failed: %s", attempt + 1, last_issues
+        )
+
+        if attempt < MAX_ROUTE_ATTEMPTS - 1:
+            # Simple retry: ask Claude to fix waypoints.
+            selected, fix_prompt = await _fix_waypoints(
+                claude_client, selected, last_issues, prefs,
+                route_summary=route_summary,
+            )
+            debug.fix_prompts.append(fix_prompt)
+            debug.validation_history[-1].prompt_type = "fix"
+            debug.validation_history[-1].prompt_sent = fix_prompt
+
+    debug.attempts = len(debug.validation_history)
+    debug.passed_validation = not last_issues
+    debug.final_waypoints = [
+        {"lat": lat, "lng": lng} for lat, lng in selected
+    ]
+    debug.snapped_waypoints = all_snapped
+    if directions_result is not None:
+        debug.route_summary = _extract_route_summary(directions_result)
+
+    return directions_result, debug
 
 
 # ---------------------------------------------------------------------------
@@ -445,9 +820,25 @@ async def _generate_waypoints(
     route_type = "loop (return to start)" if prefs.loop else "one-way"
 
     previous_context = ""
+
+    # Add riding area context for day_out routes with a selected area.
+    if (
+        prefs.riding_area_lat is not None
+        and prefs.riding_area_lng is not None
+        and prefs.riding_area_name
+    ):
+        radius = prefs.riding_area_radius_km or 30
+        previous_context += (
+            f"\nIMPORTANT: The rider has selected the '{prefs.riding_area_name}' "
+            f"riding area (centred at {prefs.riding_area_lat:.4f}, "
+            f"{prefs.riding_area_lng:.4f}, radius ~{radius:.0f}km). "
+            f"The route should spend the MAJORITY of its distance within or "
+            f"near this area. Place most waypoints inside the area.\n"
+        )
+
     if previous_issues:
         issues_text = "\n".join(f"  - {issue}" for issue in previous_issues)
-        previous_context = (
+        previous_context += (
             f"\nA PREVIOUS ATTEMPT at this route failed validation:\n"
             f"{issues_text}\n"
         )
@@ -1295,6 +1686,70 @@ async def _generate_narrative(
     response = await claude_client.messages.create(
         model=ROUTE_MODEL,
         max_tokens=300,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.content[0].text.strip(), prompt
+
+
+_THERE_AND_BACK_NARRATIVE_PROMPT = """\
+You are writing a route description for a motorcycle enthusiast app.
+
+This is a {ride_type} ride to {dest_name}.
+
+Outbound leg:
+- Distance: {out_km:.1f} km, estimated {out_min} minutes
+- Route: {out_summary}
+
+Return leg:
+- Distance: {ret_km:.1f} km, estimated {ret_min} minutes
+- Route: {ret_summary}
+
+Rider preferences: curviness {curviness}/5, {scenery_type} scenery
+
+Write 4–5 sentences describing this there-and-back ride. Cover both the \
+outbound and return legs — mention that they take different roads. \
+Be specific about the geography and terrain. Mention what makes each leg \
+worth riding and what awaits at the destination.
+
+Tone: direct, enthusiastic, written for a rider who knows what a good road \
+feels like. No generic filler.
+"""
+
+
+async def _generate_there_and_back_narrative(
+    claude_client: AsyncAnthropic,
+    out_dir: dict[str, Any] | None,
+    ret_dir: dict[str, Any] | None,
+    prefs: RoutePreferences,
+    dest_name: str,
+) -> tuple[str, str]:
+    """Generates a narrative for a there-and-back route covering both legs."""
+    out_km, out_min = _sum_legs(out_dir) if out_dir else (0, 0)
+    ret_km, ret_min = _sum_legs(ret_dir) if ret_dir else (0, 0)
+
+    out_summary = _extract_route_summary(out_dir) if out_dir else "(no route)"
+    ret_summary = _extract_route_summary(ret_dir) if ret_dir else "(no route)"
+
+    ride_type = (
+        "breakfast run" if prefs.route_type == "breakfast_run" else "overnighter"
+    )
+
+    prompt = _THERE_AND_BACK_NARRATIVE_PROMPT.format(
+        ride_type=ride_type,
+        dest_name=dest_name,
+        out_km=out_km,
+        out_min=out_min,
+        out_summary=out_summary[:500],
+        ret_km=ret_km,
+        ret_min=ret_min,
+        ret_summary=ret_summary[:500],
+        curviness=prefs.curviness,
+        scenery_type=prefs.scenery_type,
+    )
+
+    response = await claude_client.messages.create(
+        model=ROUTE_MODEL,
+        max_tokens=400,
         messages=[{"role": "user", "content": prompt}],
     )
     return response.content[0].text.strip(), prompt

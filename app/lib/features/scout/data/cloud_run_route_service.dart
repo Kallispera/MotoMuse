@@ -65,26 +65,48 @@ class CloudRunRouteService {
   // ---------------------------------------------------------------------------
 
   Map<String, dynamic> _preferencesToJson(RoutePreferences prefs) {
-    return <String, dynamic>{
+    final json = <String, dynamic>{
       'start_location': prefs.startLocation,
       'distance_km': prefs.distanceKm,
       'curviness': prefs.curviness,
       'scenery_type': prefs.sceneryType,
       'loop': prefs.loop,
       'lunch_stop': prefs.lunchStop,
+      'route_type': prefs.routeType,
     };
+
+    if (prefs.destinationLat != null) {
+      json['destination_lat'] = prefs.destinationLat;
+    }
+    if (prefs.destinationLng != null) {
+      json['destination_lng'] = prefs.destinationLng;
+    }
+    if (prefs.destinationName != null) {
+      json['destination_name'] = prefs.destinationName;
+    }
+    if (prefs.ridingAreaLat != null) {
+      json['riding_area_lat'] = prefs.ridingAreaLat;
+    }
+    if (prefs.ridingAreaLng != null) {
+      json['riding_area_lng'] = prefs.ridingAreaLng;
+    }
+    if (prefs.ridingAreaRadiusKm != null) {
+      json['riding_area_radius_km'] = prefs.ridingAreaRadiusKm;
+    }
+    if (prefs.ridingAreaName != null) {
+      json['riding_area_name'] = prefs.ridingAreaName;
+    }
+
+    return json;
   }
 
   GeneratedRoute _routeFromJson(Map<String, dynamic> json) {
-    final waypointsList = (json['waypoints'] as List<dynamic>? ?? [])
-        .cast<Map<String, dynamic>>()
-        .map(
-          (w) => LatLng(
-            (w['lat'] as num).toDouble(),
-            (w['lng'] as num).toDouble(),
-          ),
-        )
-        .toList();
+    final waypointsList = _parseWaypoints(json['waypoints']);
+
+    // Parse return leg waypoints if present.
+    final returnWaypointsList = json['return_waypoints'] != null
+        ? _parseWaypoints(json['return_waypoints'])
+        : null;
 
     return GeneratedRoute(
       encodedPolyline: json['encoded_polyline'] as String? ?? '',
@@ -95,6 +117,27 @@ class CloudRunRouteService {
               ?.cast<String>() ??
           const [],
       waypoints: waypointsList,
+      returnPolyline: json['return_polyline'] as String?,
+      returnDistanceKm: (json['return_distance_km'] as num?)?.toDouble(),
+      returnDurationMin: (json['return_duration_min'] as num?)?.toInt(),
+      returnWaypoints: returnWaypointsList,
+      returnStreetViewUrls:
+          (json['return_street_view_urls'] as List<dynamic>?)?.cast<String>(),
+      routeType: json['route_type'] as String? ?? 'day_out',
+      destinationName: json['destination_name'] as String?,
     );
+  }
+
+  List<LatLng> _parseWaypoints(dynamic waypointsJson) {
+    if (waypointsJson is! List) return [];
+    return waypointsJson
+        .cast<Map<String, dynamic>>()
+        .map(
+          (w) => LatLng(
+            (w['lat'] as num).toDouble(),
+            (w['lng'] as num).toDouble(),
+          ),
+        )
+        .toList();
   }
 }

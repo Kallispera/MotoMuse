@@ -80,18 +80,26 @@ Continuous Improvement Model:
 
 Route Generation Data Flow:
   The LLM does not generate GPS coordinates directly. The actual sequence is:
-  1. User submits preferences (start location, distance, duration, curviness, scenery type, lunch stop, loop vs point-to-point)
+  1. User submits preferences (start location, distance, curviness, scenery type, loop, route type, optional destination/riding area)
   2. Backend (Cloud Run) geocodes the start location via Google Maps Geocoding API
-  3. Backend queries the Google Maps Elevation API and Roads API to retrieve candidate road segments and elevation data within the target radius
-  4. Curviness is scored mathematically on the server: extract polyline geometry, calculate bearing-change rate over distance for each segment
-  5. Scenery proximity is scored via Google Maps Places API (parks, forests, coastlines, rivers, nature reserves) within a corridor around each candidate segment
-  6. LLM (Claude Sonnet) receives a structured summary of candidate waypoints with their curviness score, elevation profile, scenery tags, and road type — plus user preferences and quality constraints
-  7. LLM outputs an ordered list of selected waypoints with brief reasoning
-  8. Backend submits those waypoints to the Google Maps Directions API to build the navigable route
-  9. Validation layer runs programmatically against the returned polyline (see quality rules below)
-  10. If validation fails, the failure reason is passed back to the LLM for waypoint adjustment; maximum 3 retry iterations before returning a best-effort result with a user warning
-  11. On passing validation: LLM generates the route narrative and selects waypoints for Street View imagery
-  12. Google Street View Static API fetches imagery at scenic and curvy waypoints for the route preview card
+  3. Backend dispatches based on route type:
+     - **Day Out** (default): generates a circular or point-to-point route as below
+     - **Breakfast Run / Overnighter**: generates a there-and-back route with two legs on different roads (see below)
+  4. LLM (Claude Sonnet) generates waypoints using regional context (riding area name/bounds if specified), user preferences, and quality constraints
+  5. Backend submits those waypoints to the Google Maps Directions API to build the navigable route
+  6. Validation layer runs programmatically against the returned polyline (see quality rules below)
+  7. If validation fails, the failure reason is passed back to the LLM for waypoint adjustment; maximum 5 retry iterations before returning a best-effort result with a user warning
+  8. On passing validation: LLM generates the route narrative and selects waypoints for Street View imagery
+  9. Google Street View Static API fetches imagery at scenic and curvy waypoints (with coverage verification) for the route preview card
+
+  There-and-back route generation (breakfast run / overnighter):
+  - Step 1: Generate outbound waypoints (start → destination) via Claude Sonnet
+  - Step 2: Build outbound route via Directions API, validate independently
+  - Step 3: Extract outbound route summary (road names, towns passed)
+  - Step 4: Generate return waypoints (destination → start) with "avoid outbound roads" prompt context
+  - Step 5: Build return route via Directions API, validate independently
+  - Step 6: Generate narrative covering both legs
+  - Step 7: Fetch Street View images for both legs separately
 
 Routes should be generated based on the following rules:
   - Each route must have a starting point (either user's address, or them picking a different location)
@@ -102,14 +110,12 @@ Routes should be generated based on the following rules:
       Elevation changes
 
 Regional Riding Knowledge:
-  - Route generation should be informed by knowledge of renowned riding roads and regions for the user's country/locale
-  - On registration, the user's country (derived from locale or sign-up location) is stored on their profile and used as context for route generation
-  - The LLM prompt for waypoint selection includes region-specific riding knowledge — e.g. for the UK: Welsh valleys, Scottish Highlands, Peak District, North Yorkshire Moors; for the US: Blue Ridge Parkway, Pacific Coast Highway, Tail of the Dragon, etc.
-  - Waypoints should be biased toward areas known for excellent motorcycling (twisty roads, scenic passes, coastal routes, mountain roads) rather than placed purely by geometric distance from the start point
-  - Over multiple route generations, a user's routes should naturally explore the best riding areas accessible from their region, not just radiate outward from their start location
-  - This knowledge is supplied to the LLM via the system prompt as structured regional data, not hard-coded in application logic — making it easy to expand to new countries and refine over time
+  - Route generation is informed by curated riding content stored in Firestore collections (`riding_locations`, `restaurants`, `hotels`), filtered by country
+  - When a user selects a riding area on the Scout screen, the area name, center coordinates, and radius are passed to the backend and injected into the Claude Sonnet waypoint generation prompt, biasing waypoints into that region
+  - Waypoints are biased toward areas known for excellent motorcycling (twisty roads, scenic passes, coastal routes, mountain roads) rather than placed purely by geometric distance from the start point
+  - Regional data is seeded via `backend/seed_data.py` which uses Claude Sonnet to research regions and Google APIs for photos; new countries can be added by extending the seed script
+  - Netherlands is the first seeded country with 8 riding regions, each with associated restaurants and hotels
   - As the feedback loop matures (see Continuous Improvement Model), user ratings further reinforce or adjust which regional areas produce highly-rated rides
-  - Regional data is maintained as a curated knowledge file (or Firestore collection) that maps country/region to notable riding areas with brief descriptors (road character, scenery type, elevation profile, best season)
 
 Each route generation must be checked for quality (validated programmatically against the route polyline):
   - No reusing roads on the same route unless strictly necessary (detected via polyline segment overlap check, 300m sampling, 3% threshold)
@@ -150,8 +156,9 @@ The app must support Theme Awareness (Light, Dark, and System Default).
 Key Screens for MVP:
   - Splash/Onboarding: Narrative-driven intro.
   - Garage (Profile): Upload multiple bikes. LLM recognizes make/model/extras. After recognition, results are displayed in editable fields so the user can correct any inaccuracies (make, model, year, colour, trim/extras). Confirmed data is saved to Firestore.
-  - The "Scout" (Home): A map interface to set "Vibe" (Distance, Curviness, Scenery type, Loop vs Point-to-Point, Lunch Stop).
-  - Route Preview: Route card showing map overview, Street View imagery at key waypoints, narrative description, estimated duration/distance, and Spotify playlist link. User confirms before navigation begins.
+  - The "Scout" (Home): Ride type selector (Breakfast Run / Day Out / Overnighter) with conditional controls per type. Breakfast Run and Overnighter show destination pickers from curated Firestore data; Day Out shows optional riding area picker. Common controls: curviness, scenery type, distance (Day Out only), loop toggle (Day Out without area only).
+  - Explore: Browse curated riding content — three tabs for Locations, Restaurants, and Hotels. Each card links to a detail screen with CTA buttons that deep-link to Scout with preferences pre-filled.
+  - Route Preview: Route card showing map overview (two polylines for there-and-back routes: gold outbound, dashed blueGrey return), Street View imagery at key waypoints (combined from both legs), narrative description, estimated duration/distance per leg, and Spotify playlist link. User confirms before navigation begins.
   - The Ride: Turn-by-turn navigation with a minimalist "Next Turn" UI and a "Voiceover Toggle." Offline-capable once route is pre-cached.
 
 
@@ -188,9 +195,9 @@ Phase 2: The "Garage" & Vision (✅ Complete)
 
 Phase 3: The Route Architect (✅ Core route generation complete)
   Phase 3a — Route generation and map display (complete):
-  - Scout screen built: distance slider, curviness stars, scenery chip selector, loop/one-way toggle, lunch stop toggle, GPS start location auto-fill via geolocator ✅
-  - Cloud Run /generate-route endpoint: pipeline — geocoding → reverse-geocode region context → Claude Sonnet waypoint generation → Directions API (avoid highways/tolls) → waypoint spur snapping (geometric U-turn detection + branch-point snap) → programmatic validation (highways, U-turns, overlap, dead-end spurs, urban density) with up to 5 retry cycles → Claude narrative → Street View Static images with coverage verification ✅
-  - Route preview screen: google_maps_flutter map with decoded polyline, Street View image horizontal scroll, route stats, LLM narrative ✅
+  - Scout screen built: ride type selector (Breakfast Run / Day Out / Overnighter), distance slider, curviness stars, scenery chip selector, loop/one-way toggle, lunch stop toggle, GPS start location auto-fill via geolocator, destination/area pickers from curated Firestore data ✅
+  - Cloud Run /generate-route endpoint: pipeline — geocoding → reverse-geocode region context → Claude Sonnet waypoint generation (with riding area context if specified) → Directions API (avoid highways/tolls) → waypoint spur snapping (geometric U-turn detection + branch-point snap) → programmatic validation (highways, U-turns, overlap, dead-end spurs, urban density) with up to 5 retry cycles → Claude narrative → Street View Static images with coverage verification; supports three route types with there-and-back generation for breakfast runs and overnighters ✅
+  - Route preview screen: google_maps_flutter map with decoded polyline (two polylines for there-and-back routes), Street View image horizontal scroll, route stats (per-leg for two-leg routes), LLM narrative, destination name display ✅
   - New Flutter packages: geolocator ^13.0.0, google_maps_flutter ^2.9.0 ✅
   - New backend packages: googlemaps 4.10.0, anthropic 0.49.0 (Claude Sonnet for route selection and narrative) ✅
   - Claude Sonnet (claude-sonnet-4-6) used for waypoint selection and route narrative ✅
@@ -211,11 +218,38 @@ Phase 4: Audio & Spotify
   - Implement voiceover waypoints: pre-generate TTS audio for LLM-written landmark commentary, triggered by GPS position during the ride
   - Success: User's ride has a matched playlist and receives contextual audio commentary at points of interest
 
-Phase 5: Regional Riding Intelligence
-  - Build curated regional riding knowledge dataset (start with UK, US, EU core countries) mapping country/region to notable riding roads and areas with descriptors (road character, scenery type, elevation, best season)
-  - Store as a Firestore collection or structured knowledge file loadable by the route generation service
-  - Capture user country/locale at registration and persist on the user profile document
-  - Update the Claude Sonnet route generation prompt to include relevant regional riding knowledge as context, biasing waypoint selection toward known-good riding areas
-  - Instrument analytics to track whether routes touching known riding areas receive higher user ratings than those that don't
-  - Iterate regional data based on user feedback and rating patterns (ties into Continuous Improvement Model)
-  - Success: Routes consistently guide riders toward the best riding roads in their region; users report discovering roads they wouldn't have found on their own
+Phase 5: Regional Riding Content & Route Types (✅ Complete — Netherlands)
+  Curated riding content:
+  - Three new Firestore top-level collections: `riding_locations/{id}`, `restaurants/{id}`, `hotels/{id}` — filtered by `country` field (starting with "nl")
+  - `riding_locations`: name, description, center GeoPoint, bounds (NE/SW), photo URLs (Street View), tags, scenery type, display order
+  - `restaurants`: name, description, location GeoPoint, riding_location_id (denormalized name), cuisine type, price range, photo URLs, display order
+  - `hotels`: name, description, location GeoPoint, riding_location_id (denormalized name), price range, biker amenities list, photo URLs, display order
+  - Seed script (`backend/seed_data.py`): uses Claude Sonnet to research and generate descriptions for 8 Netherlands regions + restaurants/hotels per region; fetches Google Street View imagery; writes to Firestore via firebase-admin SDK
+  - 8 seeded Netherlands regions: South Limburg, Veluwe, Zeeland Coast, Drenthe, Achterhoek, Utrechtse Heuvelrug, Overijssel Salland, Noord-Brabant Kempen
+
+  Explore feature (Flutter):
+  - New `features/explore/` module following domain → data → application → presentation clean architecture
+  - Explore tab added as 4th tab (Garage, Scout, Explore, Profile) in AppShell bottom navigation
+  - Three sub-tabs: Locations, Restaurants, Hotels — each showing scrollable card lists from Firestore
+  - Detail screens for each content type with photo carousels, descriptions, and CTA buttons
+  - Deep links: "Plan a breakfast run" (restaurant) / "Plan a ride here" (location) / "Plan an overnighter" (hotel) → navigates to Scout with preferences pre-filled
+  - Firestore repository uses real-time streams ordered by `order` field
+
+  Three route types:
+  - **Breakfast Run**: User selects a restaurant from curated list → scenic 1-2h ride each way → there-and-back on different roads
+  - **Day Out**: Optional riding area selection → circular route exploring that area; or general circular route (existing behaviour)
+  - **Overnighter**: User selects a hotel from curated list → scenic 4-6h ride each way → there-and-back on different roads
+  - Scout screen: SegmentedButton ride type selector with conditional UI per type (restaurant picker, area picker, hotel picker, adaptive distance/loop controls)
+  - Route preview: two-polyline map (gold outbound, dashed blueGrey return), separate stats per leg, combined Street View carousel, destination name display
+
+  Backend route type system:
+  - `RoutePreferences` extended: `route_type`, `destination_lat/lng/name`, `riding_area_lat/lng/radius_km/name`
+  - `RouteResult` extended: `return_polyline`, `return_distance_km`, `return_duration_min`, `return_waypoints`, `return_street_view_urls`, `route_type`, `destination_name`
+  - There-and-back pipeline: generates outbound leg (start → destination), extracts route summary, generates return leg (destination → start) with "avoid outbound roads" prompt context, validates each leg independently
+  - Day Out with riding area: Claude waypoint prompt includes area name/center/radius to bias waypoints into the specified region
+  - 97 backend tests pass (7 new tests for route type dispatching, there-and-back assembly, riding area context)
+
+  - New Flutter packages: none (uses existing google_maps_flutter, cloud_firestore, flutter_riverpod)
+  - New backend packages: firebase-admin >=6.0.0 (seed script only)
+  - 142 Flutter tests pass; 0 flutter analyze errors ✅
+  - Success: Users can browse curated Netherlands riding content, plan rides to specific restaurants/hotels with scenic there-and-back routes on different roads, and explore regional riding areas ✅

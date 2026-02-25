@@ -11,6 +11,14 @@ class RoutePreferences {
     required this.sceneryType,
     required this.loop,
     this.lunchStop = false,
+    this.routeType = 'day_out',
+    this.destinationLat,
+    this.destinationLng,
+    this.destinationName,
+    this.ridingAreaLat,
+    this.ridingAreaLng,
+    this.ridingAreaRadiusKm,
+    this.ridingAreaName,
   });
 
   /// Starting address or `"lat,lng"` string. Empty means use device location.
@@ -31,6 +39,34 @@ class RoutePreferences {
   /// Whether to include a restaurant stop at roughly the halfway point.
   final bool lunchStop;
 
+  /// Ride type: `breakfast_run`, `day_out`, or `overnighter`.
+  final String routeType;
+
+  /// Destination latitude (restaurant or hotel).
+  final double? destinationLat;
+
+  /// Destination longitude (restaurant or hotel).
+  final double? destinationLng;
+
+  /// Destination name (restaurant or hotel).
+  final String? destinationName;
+
+  /// Centre latitude of the selected riding area (day_out only).
+  final double? ridingAreaLat;
+
+  /// Centre longitude of the selected riding area (day_out only).
+  final double? ridingAreaLng;
+
+  /// Approximate radius of the riding area in km.
+  final double? ridingAreaRadiusKm;
+
+  /// Name of the selected riding area.
+  final String? ridingAreaName;
+
+  /// Whether this is a there-and-back route type.
+  bool get isThereAndBack =>
+      routeType == 'breakfast_run' || routeType == 'overnighter';
+
   /// Returns a copy of this [RoutePreferences] with the specified fields
   /// replaced.
   RoutePreferences copyWith({
@@ -40,6 +76,14 @@ class RoutePreferences {
     String? sceneryType,
     bool? loop,
     bool? lunchStop,
+    String? routeType,
+    double? Function()? destinationLat,
+    double? Function()? destinationLng,
+    String? Function()? destinationName,
+    double? Function()? ridingAreaLat,
+    double? Function()? ridingAreaLng,
+    double? Function()? ridingAreaRadiusKm,
+    String? Function()? ridingAreaName,
   }) {
     return RoutePreferences(
       startLocation: startLocation ?? this.startLocation,
@@ -48,6 +92,22 @@ class RoutePreferences {
       sceneryType: sceneryType ?? this.sceneryType,
       loop: loop ?? this.loop,
       lunchStop: lunchStop ?? this.lunchStop,
+      routeType: routeType ?? this.routeType,
+      destinationLat:
+          destinationLat != null ? destinationLat() : this.destinationLat,
+      destinationLng:
+          destinationLng != null ? destinationLng() : this.destinationLng,
+      destinationName:
+          destinationName != null ? destinationName() : this.destinationName,
+      ridingAreaLat:
+          ridingAreaLat != null ? ridingAreaLat() : this.ridingAreaLat,
+      ridingAreaLng:
+          ridingAreaLng != null ? ridingAreaLng() : this.ridingAreaLng,
+      ridingAreaRadiusKm: ridingAreaRadiusKm != null
+          ? ridingAreaRadiusKm()
+          : this.ridingAreaRadiusKm,
+      ridingAreaName:
+          ridingAreaName != null ? ridingAreaName() : this.ridingAreaName,
     );
   }
 
@@ -60,7 +120,14 @@ class RoutePreferences {
         other.curviness == curviness &&
         other.sceneryType == sceneryType &&
         other.loop == loop &&
-        other.lunchStop == lunchStop;
+        other.lunchStop == lunchStop &&
+        other.routeType == routeType &&
+        other.destinationLat == destinationLat &&
+        other.destinationLng == destinationLng &&
+        other.destinationName == destinationName &&
+        other.ridingAreaLat == ridingAreaLat &&
+        other.ridingAreaLng == ridingAreaLng &&
+        other.ridingAreaName == ridingAreaName;
   }
 
   @override
@@ -71,14 +138,18 @@ class RoutePreferences {
         sceneryType,
         loop,
         lunchStop,
+        routeType,
+        destinationLat,
+        destinationLng,
+        destinationName,
+        ridingAreaLat,
+        ridingAreaLng,
+        ridingAreaName,
       );
 
   @override
   String toString() => 'RoutePreferences('
       'startLocation: $startLocation, '
       'distanceKm: $distanceKm, '
-      'curviness: $curviness, '
-      'sceneryType: $sceneryType, '
-      'loop: $loop, '
-      'lunchStop: $lunchStop)';
+      'routeType: $routeType)';
 }

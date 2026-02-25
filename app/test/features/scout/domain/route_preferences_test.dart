@@ -60,7 +60,7 @@ void main() {
     test('toString — includes key fields', () {
       final str = base.toString();
       expect(str, contains('150'));
-      expect(str, contains('forests'));
+      expect(str, contains('day_out'));
     });
   });
 }
