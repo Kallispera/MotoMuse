@@ -25,7 +25,14 @@ import requests
 import googlemaps
 from anthropic import AsyncAnthropic
 
-from models import RoutePreferences, RouteResult, RouteWaypoint
+from models import (
+    DebugAttempt,
+    GenerationDebug,
+    RoutePreferences,
+    RouteResult,
+    RouteWaypoint,
+    SnappedWaypointInfo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -156,19 +163,44 @@ async def generate(
     start_region = _reverse_geocode_region(_maps, start_lat, start_lng)
     logger.info("Start region: %s", start_region)
 
+    # -- Debug accumulator --------------------------------------------------
+    debug = GenerationDebug()
+
     # Step 2: Claude generates waypoints using geographic knowledge.
-    selected = await _generate_waypoints(
+    selected, wp_gen_prompt = await _generate_waypoints(
         _claude, start_lat, start_lng, start_region, prefs
     )
     logger.info("Claude generated %d waypoints", len(selected))
 
+    debug.waypoint_generation_prompt = wp_gen_prompt
+    debug.original_waypoints = [
+        {"lat": lat, "lng": lng} for lat, lng in selected
+    ]
+
     # Steps 3–4: Build route, validate, retry with route feedback.
     directions_result = None
     last_issues: list[str] = []
+    all_snapped: list[SnappedWaypointInfo] = []
+
     for attempt in range(MAX_ROUTE_ATTEMPTS):
-        directions_result, last_issues = await _build_and_validate(
-            _maps, start_lat, start_lng, selected, prefs
+        directions_result, last_issues, snap_info = (
+            await _build_and_validate(
+                _maps, start_lat, start_lng, selected, prefs
+            )
         )
+        all_snapped.extend(snap_info)
+
+        # Record this attempt in validation history.
+        route_summary = ""
+        if directions_result is not None:
+            route_summary = _extract_route_summary(directions_result)
+        debug.validation_history.append(DebugAttempt(
+            attempt=attempt + 1,
+            issues=list(last_issues),
+            route_summary=route_summary,
+            waypoints=[{"lat": lat, "lng": lng} for lat, lng in selected],
+        ))
+
         if not last_issues:
             logger.info("Route passed validation on attempt %d", attempt + 1)
             break
@@ -176,32 +208,48 @@ async def generate(
             "Attempt %d failed validation: %s", attempt + 1, last_issues
         )
         if attempt < MAX_ROUTE_ATTEMPTS - 1:
-            # Extract what actually went wrong from the Directions response
-            # so Claude can see road names, cities, and distances.
-            route_summary = _extract_route_summary(directions_result)
             if attempt + 1 >= FRESH_REGEN_ATTEMPT:
                 # Later retries: ask Claude to generate entirely new waypoints
                 # with the failed route as negative context.
                 logger.info(
                     "Attempt %d: full waypoint regeneration", attempt + 2
                 )
-                selected = await _generate_waypoints(
+                selected, regen_prompt = await _generate_waypoints(
                     _claude, start_lat, start_lng, start_region, prefs,
                     previous_issues=last_issues,
                     route_summary=route_summary,
                 )
+                debug.fix_prompts.append(regen_prompt)
+                # Update the last history entry with prompt info.
+                debug.validation_history[-1].prompt_type = "regenerate"
+                debug.validation_history[-1].prompt_sent = regen_prompt
             else:
                 # Early retries: adjust existing waypoints using route context.
-                selected = await _fix_waypoints(
+                selected, fix_prompt = await _fix_waypoints(
                     _claude, selected, last_issues, prefs,
                     route_summary=route_summary,
                 )
+                debug.fix_prompts.append(fix_prompt)
+                debug.validation_history[-1].prompt_type = "fix"
+                debug.validation_history[-1].prompt_sent = fix_prompt
 
     if directions_result is None:
         raise RuntimeError("Directions API returned no result after retries.")
 
+    debug.attempts = len(debug.validation_history)
+    debug.passed_validation = not last_issues
+    debug.final_waypoints = [
+        {"lat": lat, "lng": lng} for lat, lng in selected
+    ]
+    debug.snapped_waypoints = all_snapped
+    if directions_result is not None:
+        debug.route_summary = _extract_route_summary(directions_result)
+
     # Step 5: Narrative.
-    narrative = await _generate_narrative(_claude, directions_result, prefs)
+    narrative, narrative_prompt = await _generate_narrative(
+        _claude, directions_result, prefs
+    )
+    debug.narrative_prompt = narrative_prompt
 
     # Step 6: Street View images.
     # Use detailed step-level polylines for accurate road-following rendering.
@@ -233,6 +281,7 @@ async def generate(
         waypoints=waypoints,
         narrative=narrative,
         street_view_urls=street_view_urls,
+        debug=debug,
     )
 
 
@@ -375,7 +424,7 @@ async def _generate_waypoints(
     *,
     previous_issues: list[str] | None = None,
     route_summary: str | None = None,
-) -> list[tuple[float, float]]:
+) -> tuple[list[tuple[float, float]], str]:
     """Uses Claude to generate waypoints based on real geographic knowledge.
 
     Unlike the old geometric candidate approach, Claude uses its knowledge of
@@ -386,6 +435,9 @@ async def _generate_waypoints(
         previous_issues: Validation issues from a previous attempt (for retries).
         route_summary: Human-readable summary of the failed route (road names,
             cities) so Claude can see exactly what went wrong.
+
+    Returns:
+        Tuple of (waypoints, prompt_sent) for debug logging.
     """
     n_waypoints = (
         LOOP_WAYPOINT_COUNT if prefs.loop else ONEWAY_WAYPOINT_COUNT
@@ -434,7 +486,7 @@ async def _generate_waypoints(
     parsed = _extract_json_array(raw)
     if parsed is not None:
         try:
-            return [(float(p["lat"]), float(p["lng"])) for p in parsed]
+            return [(float(p["lat"]), float(p["lng"])) for p in parsed], prompt
         except (KeyError, TypeError, ValueError):
             logger.warning("Waypoint JSON missing lat/lng keys: %s", raw[:200])
 
@@ -452,14 +504,17 @@ async def _build_and_validate(
     start_lng: float,
     waypoints: list[tuple[float, float]],
     prefs: RoutePreferences,
-) -> tuple[dict[str, Any] | None, list[str]]:
+) -> tuple[dict[str, Any] | None, list[str], list[SnappedWaypointInfo]]:
     """Builds a route via the Directions API and validates the result.
 
     Returns:
-        Tuple of (directions_result, list_of_validation_issues).
+        Tuple of (directions_result, list_of_validation_issues,
+        list_of_snapped_waypoint_info).
         If the API call fails, directions_result is None and issues contains
         the error description.
     """
+    snapped_info: list[SnappedWaypointInfo] = []
+
     origin = f"{start_lat},{start_lng}"
     destination = origin if prefs.loop else (
         f"{waypoints[-1][0]},{waypoints[-1][1]}" if waypoints else origin
@@ -478,10 +533,10 @@ async def _build_and_validate(
         )
     except Exception as exc:  # noqa: BLE001
         logger.error("Directions API error: %s", exc)
-        return None, [f"Directions API error: {exc}"]
+        return None, [f"Directions API error: {exc}"], snapped_info
 
     if not result:
-        return None, ["Directions API returned no routes."]
+        return None, ["Directions API returned no routes."], snapped_info
 
     # --- Spur snapping: detect U-turn waypoints and snap them to branch
     # points before running validation.  One re-request at most. ----------
@@ -494,6 +549,16 @@ async def _build_and_validate(
                 "Spur snapping: re-requesting with %d snapped waypoint(s)",
                 len(snapped),
             )
+            # Record snapping details for debug output.
+            for idx in snapped:
+                old = intermediate[idx]
+                new = new_intermediate[idx]
+                snapped_info.append(SnappedWaypointInfo(
+                    index=idx,
+                    from_lat=old[0], from_lng=old[1],
+                    to_lat=new[0], to_lng=new[1],
+                ))
+
             wp_strs = [f"{lat},{lng}" for lat, lng in new_intermediate]
             try:
                 snap_result = maps_client.directions(
@@ -532,7 +597,7 @@ async def _build_and_validate(
             key_wps = [waypoints[i] for i in idxs]
         result[0]["key_waypoints"] = key_wps
 
-    return result[0] if result else None, issues
+    return result[0] if result else None, issues, snapped_info
 
 
 def _validate_route(result: list[dict[str, Any]]) -> list[str]:
@@ -1135,12 +1200,15 @@ async def _fix_waypoints(
     prefs: RoutePreferences,
     *,
     route_summary: str = "",
-) -> list[tuple[float, float]]:
+) -> tuple[list[tuple[float, float]], str]:
     """Asks Claude to adjust waypoints using actual route feedback.
 
     Unlike the old approach which only told Claude about abstract issues,
     this version includes the actual road names and cities the route passed
     through so Claude can make informed geographic adjustments.
+
+    Returns:
+        Tuple of (waypoints, prompt_sent) for debug logging.
     """
     wp_str = "\n".join(
         f"  {i + 1}. lat={lat}, lng={lng}"
@@ -1168,12 +1236,12 @@ async def _fix_waypoints(
     parsed = _extract_json_array(raw)
     if parsed is not None and len(parsed) == len(current):
         try:
-            return [(float(p["lat"]), float(p["lng"])) for p in parsed]
+            return [(float(p["lat"]), float(p["lng"])) for p in parsed], prompt
         except (KeyError, TypeError, ValueError):
             logger.warning("Fix JSON missing lat/lng keys: %s", raw[:200])
 
     logger.warning("Could not parse Claude fix response; keeping current waypoints")
-    return current
+    return current, prompt
 
 
 # ---------------------------------------------------------------------------
@@ -1201,8 +1269,12 @@ async def _generate_narrative(
     claude_client: AsyncAnthropic,
     directions_result: dict[str, Any],
     prefs: RoutePreferences,
-) -> str:
-    """Generates a route narrative using Claude Sonnet."""
+) -> tuple[str, str]:
+    """Generates a route narrative using Claude Sonnet.
+
+    Returns:
+        Tuple of (narrative_text, prompt_sent) for debug logging.
+    """
     distance_km, duration_min = _sum_legs(directions_result)
     start_address = directions_result["legs"][0].get(
         "start_address", prefs.start_location
@@ -1225,7 +1297,7 @@ async def _generate_narrative(
         max_tokens=300,
         messages=[{"role": "user", "content": prompt}],
     )
-    return response.content[0].text.strip()
+    return response.content[0].text.strip(), prompt
 
 
 # ---------------------------------------------------------------------------

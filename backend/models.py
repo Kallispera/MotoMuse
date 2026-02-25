@@ -1,6 +1,6 @@
 """Pydantic request and response models for the MotoMuse backend."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AnalyzeBikeRequest(BaseModel):
@@ -77,6 +77,42 @@ class RouteWaypoint(BaseModel):
     street_view_url: str = ""
 
 
+class SnappedWaypointInfo(BaseModel):
+    """Debug info about a waypoint that was snapped to fix a dead-end spur."""
+
+    index: int
+    from_lat: float
+    from_lng: float
+    to_lat: float
+    to_lng: float
+
+
+class DebugAttempt(BaseModel):
+    """Debug info for a single route generation attempt."""
+
+    attempt: int
+    issues: list[str]
+    route_summary: str = ""
+    waypoints: list[dict] = Field(default_factory=list)
+    prompt_type: str = ""
+    prompt_sent: str = ""
+
+
+class GenerationDebug(BaseModel):
+    """Comprehensive debug output for route generation troubleshooting."""
+
+    attempts: int = 0
+    passed_validation: bool = False
+    original_waypoints: list[dict] = Field(default_factory=list)
+    final_waypoints: list[dict] = Field(default_factory=list)
+    snapped_waypoints: list[SnappedWaypointInfo] = Field(default_factory=list)
+    validation_history: list[DebugAttempt] = Field(default_factory=list)
+    route_summary: str = ""
+    waypoint_generation_prompt: str = ""
+    narrative_prompt: str = ""
+    fix_prompts: list[str] = Field(default_factory=list)
+
+
 class RouteResult(BaseModel):
     """The complete result of a route generation request."""
 
@@ -97,3 +133,5 @@ class RouteResult(BaseModel):
 
     street_view_urls: list[str]
     """Street View Static API URLs at 2–3 scenic waypoints."""
+
+    debug: GenerationDebug = Field(default_factory=GenerationDebug)

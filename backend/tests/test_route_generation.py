@@ -397,11 +397,12 @@ async def test_generate_waypoints_returns_parsed_coordinates():
             '{"lat": 52.05, "lng": 5.05}]'
         )
     )
-    result = await route_generation._generate_waypoints(
+    result, prompt = await route_generation._generate_waypoints(
         claude, 52.35, 5.26, "Almere, NL", _PREFS
     )
     assert len(result) == 5
     assert result[0] == (52.0, 5.0)
+    assert "motorcycle route" in prompt.lower()
 
 
 @pytest.mark.asyncio
@@ -439,13 +440,14 @@ async def test_generate_waypoints_includes_previous_context():
         messages = _Messages()
 
     claude = _CapturingClaude()
-    await route_generation._generate_waypoints(
+    _, returned_prompt = await route_generation._generate_waypoints(
         claude, 52.35, 5.26, "Almere, NL", _PREFS,
         previous_issues=["Route uses highways for 15% of total distance"],
         route_summary="Leg 1: Almere → Amsterdam (45 km)\n  - Take A6 motorway",
     )
 
     prompt = captured_prompt["content"]
+    assert prompt == returned_prompt
     assert "PREVIOUS ATTEMPT" in prompt
     assert "highway" in prompt.lower()
     assert "A6" in prompt
@@ -961,7 +963,7 @@ async def test_key_waypoints_from_selected_not_steps():
     maps = _MockMapsClient()
 
     waypoints_in = [(51.6, -0.2), (51.7, -0.3), (51.8, -0.4), (51.65, -0.35), (51.55, -0.25)]
-    result, issues = await route_generation._build_and_validate(
+    result, issues, snap_info = await route_generation._build_and_validate(
         maps, 51.5074, -0.1278, waypoints_in, _PREFS
     )
     assert result is not None
@@ -1617,12 +1619,14 @@ async def test_build_and_validate_snaps_spur(mock_sv):
         scenery_type="forests",
         loop=True,
     )
-    result, issues = await route_generation._build_and_validate(
+    result, issues, snap_info = await route_generation._build_and_validate(
         maps, 51.5, -0.1, waypoints, prefs,
     )
     # Should have called directions twice (initial + snap retry).
     assert call_count == 2
     assert result is not None
+    # Snapping info should record which waypoint was moved.
+    assert len(snap_info) >= 1
 
 
 @pytest.mark.asyncio
@@ -1652,11 +1656,12 @@ async def test_build_and_validate_no_snap_single_leg(mock_sv):
         scenery_type="forests",
         loop=True,
     )
-    result, issues = await route_generation._build_and_validate(
+    result, issues, snap_info = await route_generation._build_and_validate(
         maps, 51.5, -0.1, waypoints, prefs,
     )
     # Only one directions call — no snapping for single-leg route.
     assert call_count == 1
+    assert snap_info == []
 
 
 # -- Widened SPUR_PROXIMITY_M safety net tests --
@@ -1699,3 +1704,272 @@ def test_check_backtrack_spurs_clean_loop_still_passes():
     encoded = _encode_polyline(points)
     issues = route_generation._check_backtrack_spurs(encoded)
     assert issues == []
+
+
+# ---------------------------------------------------------------------------
+# Debug output tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_debug_happy_path():
+    """Debug output should be populated on a successful generation."""
+    maps = _MockMapsClient()
+    claude = _MockClaudeClient()
+
+    result = await route_generation.generate(
+        _PREFS,
+        maps_client=maps,
+        claude_client=claude,
+    )
+
+    debug = result.debug
+    assert debug.attempts >= 1
+    assert debug.passed_validation is True
+    assert len(debug.original_waypoints) == 5
+    assert len(debug.final_waypoints) == 5
+    assert debug.waypoint_generation_prompt != ""
+    assert "motorcycle route" in debug.waypoint_generation_prompt.lower()
+    assert debug.narrative_prompt != ""
+    assert "route description" in debug.narrative_prompt.lower()
+    assert len(debug.validation_history) >= 1
+    assert debug.validation_history[0].attempt == 1
+    assert debug.validation_history[0].issues == []
+
+
+@pytest.mark.asyncio
+async def test_generate_debug_records_retry_history():
+    """Debug output should capture validation issues and fix prompts on retries."""
+
+    call_count = {"directions": 0}
+
+    class _HighwayFirstMapsClient(_MockMapsClient):
+        def directions(self, **kwargs):
+            call_count["directions"] += 1
+            if call_count["directions"] == 1:
+                result = _make_directions_result()
+                result[0]["legs"][0]["steps"] = [
+                    {
+                        "distance": {"value": 145000},
+                        "html_instructions": "Head north on M1 motorway",
+                        "start_location": {"lat": 51.5, "lng": -0.1},
+                        "end_location": {"lat": 52.5, "lng": -0.2},
+                    },
+                    {
+                        "distance": {"value": 5000},
+                        "html_instructions": "Turn right",
+                        "start_location": {"lat": 52.5, "lng": -0.2},
+                        "end_location": {"lat": 52.6, "lng": -0.3},
+                    },
+                ]
+                return result
+            return _make_directions_result()
+
+    maps = _HighwayFirstMapsClient()
+    claude = _MockClaudeClient()
+
+    result = await route_generation.generate(
+        _PREFS,
+        maps_client=maps,
+        claude_client=claude,
+    )
+
+    debug = result.debug
+    assert debug.attempts >= 2
+    # First attempt should have highway issues.
+    assert len(debug.validation_history[0].issues) > 0
+    assert "highway" in debug.validation_history[0].issues[0].lower()
+    # Should have at least one fix prompt.
+    assert len(debug.fix_prompts) >= 1
+    # The fix prompt should mention the validation issue.
+    assert "highway" in debug.fix_prompts[0].lower() or "motorway" in debug.fix_prompts[0].lower()
+    # Route summary should be captured.
+    assert debug.route_summary != ""
+
+
+@pytest.mark.asyncio
+async def test_generate_debug_max_retries_records_all_attempts():
+    """When all attempts fail, debug should record all validation history."""
+
+    class _AlwaysHighwayMaps(_MockMapsClient):
+        def directions(self, **kwargs):
+            result = _make_directions_result()
+            result[0]["legs"][0]["steps"] = [
+                {
+                    "distance": {"value": 145000},
+                    "html_instructions": "Head on M25 motorway",
+                    "start_location": {"lat": 51.5, "lng": -0.1},
+                    "end_location": {"lat": 52.5, "lng": -0.2},
+                },
+                {
+                    "distance": {"value": 5000},
+                    "html_instructions": "Exit motorway",
+                    "start_location": {"lat": 52.5, "lng": -0.2},
+                    "end_location": {"lat": 52.6, "lng": -0.3},
+                },
+            ]
+            return result
+
+    maps = _AlwaysHighwayMaps()
+    claude = _MockClaudeClient()
+
+    result = await route_generation.generate(
+        _PREFS,
+        maps_client=maps,
+        claude_client=claude,
+    )
+
+    debug = result.debug
+    assert debug.attempts == route_generation.MAX_ROUTE_ATTEMPTS
+    assert debug.passed_validation is False
+    assert len(debug.validation_history) == route_generation.MAX_ROUTE_ATTEMPTS
+    # Every attempt should have issues.
+    for entry in debug.validation_history:
+        assert len(entry.issues) > 0
+    # Should have fix prompts for all retries (attempts - 1).
+    assert len(debug.fix_prompts) == route_generation.MAX_ROUTE_ATTEMPTS - 1
+
+
+@pytest.mark.asyncio
+async def test_generate_debug_original_vs_final_waypoints():
+    """Original and final waypoints should differ when retries change them."""
+
+    call_count = {"directions": 0}
+
+    class _FailOnceMaps(_MockMapsClient):
+        def directions(self, **kwargs):
+            call_count["directions"] += 1
+            if call_count["directions"] == 1:
+                result = _make_directions_result()
+                result[0]["legs"][0]["steps"] = [
+                    {
+                        "distance": {"value": 145000},
+                        "html_instructions": "Head on M25 motorway",
+                        "start_location": {"lat": 51.5, "lng": -0.1},
+                        "end_location": {"lat": 52.5, "lng": -0.2},
+                    },
+                    {
+                        "distance": {"value": 5000},
+                        "html_instructions": "Turn right",
+                        "start_location": {"lat": 52.5, "lng": -0.2},
+                        "end_location": {"lat": 52.6, "lng": -0.3},
+                    },
+                ]
+                return result
+            return _make_directions_result()
+
+    # Use a claude client that returns different waypoints on second call.
+    response_count = {"n": 0}
+
+    class _DifferentWaypointsClaude:
+        class _Messages:
+            async def create(inner_self, **kwargs):
+                msg = kwargs.get("messages", [{}])[0].get("content", "")
+                if "route description" in msg.lower():
+                    text = "A great route through the countryside."
+                else:
+                    response_count["n"] += 1
+                    if response_count["n"] == 1:
+                        text = (
+                            '[{"lat": 51.6, "lng": -0.2}, '
+                            '{"lat": 51.7, "lng": -0.3}, '
+                            '{"lat": 51.8, "lng": -0.4}, '
+                            '{"lat": 51.75, "lng": -0.35}, '
+                            '{"lat": 51.65, "lng": -0.25}]'
+                        )
+                    else:
+                        text = (
+                            '[{"lat": 51.61, "lng": -0.21}, '
+                            '{"lat": 51.71, "lng": -0.31}, '
+                            '{"lat": 51.81, "lng": -0.41}, '
+                            '{"lat": 51.76, "lng": -0.36}, '
+                            '{"lat": 51.66, "lng": -0.26}]'
+                        )
+
+                class _Response:
+                    class _Content:
+                        pass
+                    content = [_Content()]
+                _Response.content[0].text = text
+                return _Response()
+
+        messages = _Messages()
+
+    maps = _FailOnceMaps()
+    claude = _DifferentWaypointsClaude()
+
+    result = await route_generation.generate(
+        _PREFS,
+        maps_client=maps,
+        claude_client=claude,
+    )
+
+    debug = result.debug
+    # Original waypoints should be from the first Claude call.
+    assert debug.original_waypoints[0]["lat"] == 51.6
+    # Final waypoints should be from the fix call (different).
+    assert debug.final_waypoints[0]["lat"] != debug.original_waypoints[0]["lat"]
+
+
+@pytest.mark.asyncio
+@patch("route_generation.requests.get", side_effect=_mock_sv_coverage_ok)
+async def test_generate_debug_snapped_waypoints(mock_sv):
+    """Debug output should record spur-snapped waypoint details."""
+    spur_result = _make_spur_legs_result(spur_km=1.0)
+    clean_result = _make_clean_3leg_result()
+    call_count = 0
+
+    class _SnapMaps:
+        def directions(self, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return spur_result
+            return clean_result
+
+        def geocode(self, address):
+            return [{"geometry": {"location": {"lat": 51.5, "lng": -0.1}}}]
+
+        def reverse_geocode(self, latlng):
+            return [{"formatted_address": "Test, UK"}]
+
+    maps = _SnapMaps()
+    spur_tip = 51.5 + 1.0 / 111.0
+    waypoints = [(51.5, 0.0), (spur_tip, 0.0)]
+
+    prefs = RoutePreferences(
+        start_location="51.5,-0.1",
+        distance_km=100,
+        curviness=3,
+        scenery_type="forests",
+        loop=True,
+    )
+
+    result, issues, snap_info = await route_generation._build_and_validate(
+        maps, 51.5, -0.1, waypoints, prefs,
+    )
+
+    assert len(snap_info) >= 1
+    snapped = snap_info[0]
+    assert snapped.from_lat == pytest.approx(spur_tip, abs=0.01)
+    assert snapped.to_lat != snapped.from_lat
+
+
+@pytest.mark.asyncio
+async def test_generate_debug_validation_history_waypoints():
+    """Each validation history entry should record the waypoints used."""
+    maps = _MockMapsClient()
+    claude = _MockClaudeClient()
+
+    result = await route_generation.generate(
+        _PREFS,
+        maps_client=maps,
+        claude_client=claude,
+    )
+
+    debug = result.debug
+    assert len(debug.validation_history) >= 1
+    entry = debug.validation_history[0]
+    assert len(entry.waypoints) == 5
+    assert "lat" in entry.waypoints[0]
+    assert "lng" in entry.waypoints[0]
