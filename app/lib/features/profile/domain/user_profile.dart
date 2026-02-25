@@ -14,6 +14,9 @@ class UserProfile {
     this.garagePersonality,
     this.garagePersonalityBikeCount = 0,
     this.homeAffirmingMessage,
+    this.defaultCurviness,
+    this.defaultSceneryType,
+    this.defaultDistanceKm,
   });
 
   /// Firebase Auth UID.
@@ -39,6 +42,15 @@ class UserProfile {
 
   /// Affirming message about the rider's closest riding region.
   final String? homeAffirmingMessage;
+
+  /// Preferred curviness (1–5). Null means no preference saved.
+  final int? defaultCurviness;
+
+  /// Preferred scenery type: `forests`, `coastline`, `mountains`, or `mixed`.
+  final String? defaultSceneryType;
+
+  /// Preferred ride distance in kilometres. Null means no preference saved.
+  final int? defaultDistanceKm;
 
   @override
   bool operator ==(Object other) {

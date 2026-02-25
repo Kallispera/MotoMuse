@@ -103,4 +103,45 @@ void main() {
       expect(doc.data()!['garagePersonalityBikeCount'], 3);
     });
   });
+
+  group('updateRidingPreferences', () {
+    test('writes curviness, scenery, and distance', () async {
+      await repository.updateRidingPreferences(
+        uid: 'uid123',
+        curviness: 4,
+        sceneryType: 'forests',
+        distanceKm: 200,
+      );
+
+      final doc =
+          await fakeFirestore.collection('users').doc('uid123').get();
+      expect(doc.data()!['defaultCurviness'], 4);
+      expect(doc.data()!['defaultSceneryType'], 'forests');
+      expect(doc.data()!['defaultDistanceKm'], 200);
+    });
+
+    test('parses riding preferences from watchProfile', () async {
+      await fakeFirestore.collection('users').doc('uid123').set({
+        'defaultCurviness': 5,
+        'defaultSceneryType': 'coastline',
+        'defaultDistanceKm': 100,
+      });
+
+      final profile = await repository.watchProfile('uid123').first;
+      expect(profile!.defaultCurviness, 5);
+      expect(profile.defaultSceneryType, 'coastline');
+      expect(profile.defaultDistanceKm, 100);
+    });
+
+    test('defaults to null when not set', () async {
+      await fakeFirestore.collection('users').doc('uid123').set({
+        'country': 'nl',
+      });
+
+      final profile = await repository.watchProfile('uid123').first;
+      expect(profile!.defaultCurviness, isNull);
+      expect(profile.defaultSceneryType, isNull);
+      expect(profile.defaultDistanceKm, isNull);
+    });
+  });
 }

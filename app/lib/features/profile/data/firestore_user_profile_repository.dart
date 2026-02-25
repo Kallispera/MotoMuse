@@ -71,6 +71,23 @@ class FirestoreUserProfileRepository {
     );
   }
 
+  /// Saves the rider's default riding preferences.
+  Future<void> updateRidingPreferences({
+    required String uid,
+    required int curviness,
+    required String sceneryType,
+    required int distanceKm,
+  }) async {
+    await _firestore.collection('users').doc(uid).set(
+      {
+        'defaultCurviness': curviness,
+        'defaultSceneryType': sceneryType,
+        'defaultDistanceKm': distanceKm,
+      },
+      SetOptions(merge: true),
+    );
+  }
+
   UserProfile _fromDocument(String uid, Map<String, dynamic> data) {
     final homeLoc = data['homeLocation'] as GeoPoint?;
     return UserProfile(
@@ -86,6 +103,9 @@ class FirestoreUserProfileRepository {
       garagePersonalityBikeCount:
           (data['garagePersonalityBikeCount'] as num?)?.toInt() ?? 0,
       homeAffirmingMessage: data['homeAffirmingMessage'] as String?,
+      defaultCurviness: (data['defaultCurviness'] as num?)?.toInt(),
+      defaultSceneryType: data['defaultSceneryType'] as String?,
+      defaultDistanceKm: (data['defaultDistanceKm'] as num?)?.toInt(),
     );
   }
 }

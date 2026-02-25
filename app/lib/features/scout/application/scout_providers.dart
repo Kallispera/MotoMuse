@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:motomuse/features/garage/application/garage_providers.dart';
+import 'package:motomuse/features/onboarding/application/onboarding_providers.dart';
 import 'package:motomuse/features/scout/data/cloud_run_route_service.dart';
 import 'package:motomuse/features/scout/domain/generated_route.dart';
 import 'package:motomuse/features/scout/domain/route_preferences.dart';
@@ -27,17 +28,20 @@ final cloudRunRouteServiceProvider = Provider<CloudRunRouteService>((ref) {
 
 /// Holds the user's current ride preferences on the Scout screen.
 ///
-/// Survives rebuilds while the user is tweaking sliders. Reset when a route
-/// generation completes if desired, or left as-is so the next generation
-/// starts from the same settings.
+/// Initialises from the user's saved riding preferences in their profile.
+/// Falls back to sensible defaults (curviness 3, mixed scenery, 150 km)
+/// when no profile preferences have been saved yet.
 final routePreferencesProvider =
-    StateProvider<RoutePreferences>((ref) => const RoutePreferences(
-          startLocation: '', // empty = resolve device location at generate time
-          distanceKm: 150,
-          curviness: 3,
-          sceneryType: 'mixed',
-          loop: true,
-        ));
+    StateProvider<RoutePreferences>((ref) {
+  final profile = ref.watch(userProfileProvider).valueOrNull;
+  return RoutePreferences(
+    startLocation: '', // empty = resolve device location at generate time
+    distanceKm: profile?.defaultDistanceKm ?? 150,
+    curviness: profile?.defaultCurviness ?? 3,
+    sceneryType: profile?.defaultSceneryType ?? 'mixed',
+    loop: true,
+  );
+});
 
 // ---------------------------------------------------------------------------
 // RouteGenerationNotifier
