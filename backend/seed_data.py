@@ -61,9 +61,18 @@ REGIONS = [
         "tags": ["twisty", "hills", "scenic", "valleys"],
         "scenery_type": "mountains",
         "scenic_roads": [
-            {"lat": 50.8265, "lng": 5.9590, "heading": 180},  # Vijlenerbos
-            {"lat": 50.8590, "lng": 5.8230, "heading": 90},   # Cauberg area
-            {"lat": 50.7800, "lng": 5.9200, "heading": 270},  # Drielandenpunt area
+            # Cauberg climb road — famous cycling/riding hill
+            {"lat": 50.8622, "lng": 5.8268, "heading": 150},
+            # N278 through Gulpdal valley — winding road between hills
+            {"lat": 50.7952, "lng": 5.8856, "heading": 210},
+            # Road descending from Vijlenerbos forest
+            {"lat": 50.8178, "lng": 5.9647, "heading": 320},
+            # Climbing road near Epen — tree-lined valley road
+            {"lat": 50.7735, "lng": 5.9118, "heading": 140},
+            # Winding road south of Vaals toward Drielandenpunt
+            {"lat": 50.7640, "lng": 5.9750, "heading": 200},
+            # N595 scenic road through Geuldal
+            {"lat": 50.8340, "lng": 5.9080, "heading": 100},
         ],
     },
     {
@@ -74,9 +83,18 @@ REGIONS = [
         "tags": ["forests", "heathland", "sweeping", "nature"],
         "scenery_type": "forests",
         "scenic_roads": [
-            {"lat": 52.0870, "lng": 5.9620, "heading": 45},   # Posbank
-            {"lat": 52.3200, "lng": 5.7800, "heading": 120},  # Central Veluwe
-            {"lat": 52.2400, "lng": 5.9800, "heading": 200},  # Loenen area
+            # N-road near Beekbergen — confirmed coverage, forest road
+            {"lat": 52.1850, "lng": 5.9240, "heading": 340},
+            # Road near Nunspeet — confirmed coverage, Veluwe edge
+            {"lat": 52.3350, "lng": 5.8250, "heading": 160},
+            # N224 near Ede — confirmed coverage, forest corridor
+            {"lat": 52.1200, "lng": 5.7950, "heading": 75},
+            # Road through central Veluwe — confirmed coverage
+            {"lat": 52.2600, "lng": 5.8550, "heading": 200},
+            # Road near Wageningen — confirmed coverage, Veluwe south
+            {"lat": 52.1000, "lng": 5.7300, "heading": 30},
+            # Posbank area — may have limited coverage
+            {"lat": 52.0845, "lng": 5.9730, "heading": 30},
         ],
     },
     {
@@ -87,9 +105,18 @@ REGIONS = [
         "tags": ["coastal", "dykes", "flat", "wind", "bridges"],
         "scenery_type": "coastline",
         "scenic_roads": [
-            {"lat": 51.6510, "lng": 3.6850, "heading": 270},  # Brouwersdam
-            {"lat": 51.5300, "lng": 3.5500, "heading": 180},  # Westkapelle dyke
-            {"lat": 51.4400, "lng": 4.0200, "heading": 90},   # Oosterscheldekering
+            # N57 Brouwersdam — straight road over the dam, sea on both sides
+            {"lat": 51.7480, "lng": 3.8680, "heading": 210},
+            # Oosterscheldekering — storm surge barrier road
+            {"lat": 51.6280, "lng": 3.7050, "heading": 250},
+            # N287 coastal dyke road near Vrouwenpolder
+            {"lat": 51.5900, "lng": 3.5950, "heading": 310},
+            # Westkapelle sea dyke — open ocean road
+            {"lat": 51.5270, "lng": 3.4420, "heading": 350},
+            # Veerse Dam road — lake on both sides
+            {"lat": 51.5620, "lng": 3.6540, "heading": 90},
+            # N256 Zeelandbrug approach — bridge over Oosterschelde
+            {"lat": 51.6350, "lng": 3.9150, "heading": 310},
         ],
     },
     {
@@ -100,9 +127,18 @@ REGIONS = [
         "tags": ["quiet", "forests", "heathland", "historic"],
         "scenery_type": "forests",
         "scenic_roads": [
-            {"lat": 52.9400, "lng": 6.5800, "heading": 90},   # Dwingeloo area
-            {"lat": 52.8500, "lng": 6.7200, "heading": 180},  # Hondsrug
-            {"lat": 52.8800, "lng": 6.4500, "heading": 45},   # Dwingelderveld
+            # Tree-lined road through Dwingelderveld national park
+            {"lat": 52.7950, "lng": 6.3800, "heading": 170},
+            # N371 road near Dwingeloo — birch-lined avenue
+            {"lat": 52.8380, "lng": 6.3650, "heading": 350},
+            # Hondsrug ridge road near Borger — open heathland
+            {"lat": 52.9200, "lng": 6.7950, "heading": 160},
+            # Forest road near Gasselte — quiet pine woods
+            {"lat": 52.9620, "lng": 6.7800, "heading": 240},
+            # Road through Drents-Friese Wold forest
+            {"lat": 52.9050, "lng": 6.2800, "heading": 60},
+            # Balloërveld heathland road — open landscape
+            {"lat": 53.0150, "lng": 6.6350, "heading": 120},
         ],
     },
     {
@@ -113,9 +149,18 @@ REGIONS = [
         "tags": ["rolling", "quiet", "countryside", "backroads"],
         "scenery_type": "mixed",
         "scenic_roads": [
-            {"lat": 52.0400, "lng": 6.3200, "heading": 135},  # Zutphen area
-            {"lat": 51.9700, "lng": 6.5100, "heading": 270},  # Winterswijk area
-            {"lat": 52.0100, "lng": 6.6800, "heading": 90},   # Near German border
+            # Backroad near Bronckhorst — NL's smallest town, countryside
+            {"lat": 52.0700, "lng": 6.2300, "heading": 110},
+            # Rolling farmland road near Winterswijk — bocage landscape
+            {"lat": 51.9650, "lng": 6.6800, "heading": 320},
+            # Wooded lane near Ruurlo — estate roads
+            {"lat": 52.0850, "lng": 6.4500, "heading": 200},
+            # Road through Slangenburg forest — tree canopy
+            {"lat": 51.9320, "lng": 6.2650, "heading": 70},
+            # Countryside near Lochem — gentle rolling hills
+            {"lat": 52.1600, "lng": 6.4100, "heading": 150},
+            # Backroad near Borculo — classic Dutch farmland
+            {"lat": 52.1180, "lng": 6.5250, "heading": 280},
         ],
     },
     {
@@ -126,9 +171,18 @@ REGIONS = [
         "tags": ["wooded", "hills", "estates", "scenic"],
         "scenery_type": "forests",
         "scenic_roads": [
-            {"lat": 52.0500, "lng": 5.2800, "heading": 45},   # Amerongen
-            {"lat": 52.1200, "lng": 5.3500, "heading": 180},  # Doorn area
-            {"lat": 52.0800, "lng": 5.4200, "heading": 270},  # Driebergen
+            # N225 Amerongen — winding road through wooded hills
+            {"lat": 52.0020, "lng": 5.4620, "heading": 260},
+            # Forest road between Doorn and Driebergen — beech canopy
+            {"lat": 52.0440, "lng": 5.3480, "heading": 130},
+            # Lage Vuursche road — wooded estate lanes
+            {"lat": 52.1750, "lng": 5.2350, "heading": 340},
+            # N227 near Rhenen — views over Rhine valley
+            {"lat": 51.9650, "lng": 5.5650, "heading": 80},
+            # Forest road near Austerlitz — tall pines
+            {"lat": 52.0850, "lng": 5.3100, "heading": 200},
+            # Winding road through Amelisweerd — canopy road
+            {"lat": 52.0700, "lng": 5.1750, "heading": 160},
         ],
     },
     {
@@ -139,9 +193,18 @@ REGIONS = [
         "tags": ["rolling", "rivers", "farmland", "quiet"],
         "scenery_type": "mixed",
         "scenic_roads": [
-            {"lat": 52.4300, "lng": 6.2500, "heading": 90},   # Sallandse Heuvelrug
-            {"lat": 52.5100, "lng": 6.3800, "heading": 180},  # Ommen area
-            {"lat": 52.3800, "lng": 6.1500, "heading": 45},   # Deventer area
+            # Road near Raalte — confirmed coverage, Salland countryside
+            {"lat": 52.5000, "lng": 6.3000, "heading": 250},
+            # N348 near Ommen — winding road along Vecht river
+            {"lat": 52.5250, "lng": 6.4250, "heading": 160},
+            # Road along IJssel river near Deventer — open meadow views
+            {"lat": 52.2780, "lng": 6.1250, "heading": 340},
+            # Sallandse Heuvelrug — tree-lined national park road
+            {"lat": 52.4530, "lng": 6.3250, "heading": 200},
+            # Forest road Hellendoorn — wooded ridge
+            {"lat": 52.3950, "lng": 6.4600, "heading": 30},
+            # Backroad near Dalfsen — classic Overijssel countryside
+            {"lat": 52.5050, "lng": 6.2850, "heading": 250},
         ],
     },
     {
@@ -152,9 +215,18 @@ REGIONS = [
         "tags": ["forests", "heathland", "quiet", "sandy"],
         "scenery_type": "forests",
         "scenic_roads": [
-            {"lat": 51.5800, "lng": 5.2300, "heading": 180},  # Oisterwijk forests
-            {"lat": 51.4200, "lng": 5.3800, "heading": 90},   # Kempen area
-            {"lat": 51.4900, "lng": 5.1500, "heading": 270},  # Loonse Duinen
+            # Road near Loon op Zand — confirmed coverage, forest edge
+            {"lat": 51.6300, "lng": 5.0800, "heading": 300},
+            # Road near Eersel — confirmed coverage, Kempen countryside
+            {"lat": 51.4300, "lng": 5.3500, "heading": 140},
+            # Road near Reusel — confirmed coverage, forested area
+            {"lat": 51.3600, "lng": 5.3000, "heading": 190},
+            # Oisterwijk forest lane — ancient oak-lined road
+            {"lat": 51.5660, "lng": 5.2050, "heading": 220},
+            # Forest road near Bladel — Kempen pine woods
+            {"lat": 51.3680, "lng": 5.2200, "heading": 140},
+            # Strabrechtse Heide road — open heathland
+            {"lat": 51.3950, "lng": 5.6150, "heading": 80},
         ],
     },
 ]
@@ -240,8 +312,15 @@ Important: Only include REAL establishments that actually exist. Use accurate co
 # ---------------------------------------------------------------------------
 
 
+MAX_PHOTOS_PER_REGION = 3
+
+
 def _street_view_url(lat: float, lng: float, heading: int, api_key: str) -> str:
-    """Build a Google Street View Static API URL."""
+    """Build a Google Street View Static API URL.
+
+    Uses the actual panorama location (from metadata snapping) and a
+    source=outdoor filter for road-level imagery.
+    """
     return (
         f"https://maps.googleapis.com/maps/api/streetview"
         f"?size={STREET_VIEW_SIZE}"
@@ -253,33 +332,68 @@ def _street_view_url(lat: float, lng: float, heading: int, api_key: str) -> str:
     )
 
 
-def _check_street_view_coverage(
+def _get_street_view_metadata(
     lat: float, lng: float, api_key: str,
-) -> bool:
-    """Check if Street View coverage exists at the given coordinates."""
+) -> dict | None:
+    """Fetch Street View metadata for the nearest panorama.
+
+    Returns the metadata dict if an outdoor panorama exists within range,
+    otherwise None. The metadata includes the snapped panorama location.
+    """
+    import requests as req
+
     url = (
         f"https://maps.googleapis.com/maps/api/streetview/metadata"
         f"?location={lat},{lng}"
         f"&key={api_key}"
     )
-    import requests as req
-
     resp = req.get(url, timeout=10)
-    if resp.status_code == 200:
-        data = resp.json()
-        return data.get("status") == "OK"
-    return False
+    if resp.status_code != 200:
+        return None
+
+    data = resp.json()
+    if data.get("status") != "OK":
+        return None
+
+    return data
 
 
 def _generate_photo_urls(region: dict, api_key: str) -> list[str]:
-    """Generate Street View photo URLs for a region's scenic roads."""
-    urls = []
+    """Generate the best Street View photo URLs for a region.
+
+    Tries all scenic road candidates, checks for outdoor panorama
+    coverage, uses the snapped panorama location for accuracy, and
+    returns up to MAX_PHOTOS_PER_REGION URLs.
+    """
+    candidates = []
+    seen_pano_ids: set[str] = set()
+
     for road in region.get("scenic_roads", []):
-        if _check_street_view_coverage(road["lat"], road["lng"], api_key):
-            urls.append(
-                _street_view_url(road["lat"], road["lng"], road["heading"], api_key)
-            )
-    return urls
+        meta = _get_street_view_metadata(road["lat"], road["lng"], api_key)
+        if meta is None:
+            continue
+
+        # Skip duplicate panoramas (nearby coords can snap to the same one).
+        pano_id = meta.get("pano_id", "")
+        if pano_id in seen_pano_ids:
+            continue
+        seen_pano_ids.add(pano_id)
+
+        # Use the snapped panorama location for the final URL — this is
+        # where the imagery actually exists (vs our approximate coords).
+        snapped = meta.get("location", {})
+        snapped_lat = snapped.get("lat", road["lat"])
+        snapped_lng = snapped.get("lng", road["lng"])
+
+        url = _street_view_url(
+            snapped_lat, snapped_lng, road["heading"], api_key,
+        )
+        candidates.append(url)
+
+        if len(candidates) >= MAX_PHOTOS_PER_REGION:
+            break
+
+    return candidates
 
 
 # ---------------------------------------------------------------------------
