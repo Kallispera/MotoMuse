@@ -156,6 +156,28 @@ so the camera faces along the road direction.
 
 ---
 
+## Debug output
+
+Every `RouteResult` response includes a `debug` field with comprehensive
+generation diagnostics. This is invaluable for troubleshooting route quality.
+
+**Fields in `debug`:**
+
+| Field | Type | What it contains |
+|---|---|---|
+| `attempts` | `int` | Total validation attempts made. |
+| `passed_validation` | `bool` | Whether the final route passed all checks. |
+| `original_waypoints` | `[{lat, lng}]` | Waypoints from the first Claude generation call. |
+| `final_waypoints` | `[{lat, lng}]` | Waypoints used for the final route (after fixes/retries). |
+| `snapped_waypoints` | `[{index, from, to}]` | Waypoints moved by the spur snapping algorithm. |
+| `validation_history` | `[{attempt, issues, route_summary, waypoints, prompt_type, prompt_sent}]` | Per-attempt record of issues found, the route summary, and the fix/regen prompt sent to Claude. |
+| `route_summary` | `string` | Final route summary (road names, cities, distances). |
+| `waypoint_generation_prompt` | `string` | The full prompt sent to Claude for initial waypoint generation. |
+| `narrative_prompt` | `string` | The full prompt sent to Claude for narrative generation. |
+| `fix_prompts` | `[string]` | All fix/regeneration prompts sent to Claude during retries. |
+
+---
+
 ## Quality levers — quick reference
 
 | Want to… | Change |
