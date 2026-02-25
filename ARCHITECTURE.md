@@ -51,6 +51,23 @@
 
 ---
 
+### Firebase App Distribution (project: `motomuse-2b33f`)
+- **Platform:** Android (iOS planned when Apple Developer account is available)
+- **Tester group:** `testers` — managed in Firebase Console → App Distribution
+- **Build trigger:** GitHub Actions workflow (`.github/workflows/distribute.yml`) runs on every push to `main` + manual `workflow_dispatch`
+- **Signing:** Release keystore (`upload-keystore.jks`) — base64-encoded in GitHub Secrets
+- **GitHub Secrets required:**
+  | Secret | Purpose |
+  |--------|---------|
+  | `KEYSTORE_BASE64` | Base64-encoded Android release keystore |
+  | `KEYSTORE_PASSWORD` | Keystore password |
+  | `KEY_ALIAS` | Key alias (e.g. `upload`) |
+  | `KEY_PASSWORD` | Key password |
+  | `FIREBASE_SERVICE_ACCOUNT` | Service account JSON with Firebase App Distribution Admin role |
+- **How testers get builds:** Invited via email → install Firebase App Tester app (Play Store) → new builds appear automatically
+
+---
+
 ### Secret Manager (project: `motomuse-488408`)
 | Secret name | Used by | Status |
 |-------------|---------|--------|
@@ -176,6 +193,9 @@ MotoMuse/
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   └── tests/
+├── .github/workflows/
+│   ├── ci.yml                  # lint, test, coverage on PR/push
+│   └── distribute.yml          # build APK + upload to Firebase App Distribution
 ├── ARCHITECTURE.md             # this file
 ├── Design-overview.md          # full product & technical design
 └── CLAUDE.md                   # instructions for Claude Code
@@ -220,6 +240,16 @@ cd app && flutter test
 
 # Backend
 cd backend && pytest
+```
+
+### Distribute Android build to testers
+Builds are distributed automatically via GitHub Actions on push to `main`.
+To trigger manually: go to GitHub → Actions → Distribute → Run workflow.
+
+Local build (for testing):
+```bash
+cd app
+flutter build apk --release
 ```
 
 ### Git remote

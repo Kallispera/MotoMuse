@@ -13,6 +13,11 @@
 secrets/
 backend/firebase-sa-key.json
 
+# Android signing
+*.jks
+*.keystore
+key.properties
+
 # Python (backend)
 __pycache__/
 *.pyc

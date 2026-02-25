@@ -39,6 +39,12 @@ Code Health & Testing Strategy:
     - `dart_mutant` (open-source, Rust-based, 40+ mutation operators) used periodically to verify that tests actually catch bugs, not just execute lines
     - Run against the business logic and data layers; not required for UI or generated code
 
+Test Distribution:
+  - Android test builds are distributed to testers via **Firebase App Distribution**
+  - Automated: GitHub Actions builds a release APK on every push to `main` and uploads it
+  - Testers are managed in Firebase Console → App Distribution → `testers` group
+  - iOS distribution deferred until Apple Developer Program enrollment
+
 The front end should be on iOS and Android mobile phones (using Flutter)
 The phone should not do the heavy lifting in route generation, this should be handled by the backend
 We should use Firebase services for authentication, database and storage

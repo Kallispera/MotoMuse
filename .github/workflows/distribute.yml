@@ -1,0 +1,81 @@
+name: Distribute
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_notes:
+        description: 'Release notes for testers'
+        required: false
+        default: ''
+
+jobs:
+  distribute-android:
+    name: Build & Distribute Android
+    runs-on: ubuntu-latest
+    # Only run after CI passes on push; always run on manual dispatch
+    needs: []
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.9'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+        working-directory: app
+
+      - name: Decode keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/android/app/upload-keystore.jks
+        working-directory: app
+
+      - name: Create key.properties
+        run: |
+          cat > app/android/key.properties << EOF
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          storeFile=app/upload-keystore.jks
+          EOF
+        working-directory: app
+
+      - name: Build release APK
+        run: flutter build apk --release
+        working-directory: app
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Authenticate Firebase
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > /tmp/firebase-sa.json
+          export GOOGLE_APPLICATION_CREDENTIALS=/tmp/firebase-sa.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/firebase-sa.json" >> $GITHUB_ENV
+
+      - name: Upload to Firebase App Distribution
+        run: |
+          NOTES="${{ github.event.inputs.release_notes }}"
+          if [ -z "$NOTES" ]; then
+            NOTES="Build from commit $(git rev-parse --short HEAD): $(git log -1 --pretty=%s)"
+          fi
+          firebase appdistribution:distribute \
+            app/build/app/outputs/flutter-apk/app-release.apk \
+            --app "1:498512468096:android:c278c26dc2554a4666ee65" \
+            --groups "testers" \
+            --release-notes "$NOTES"
+        working-directory: app
+
+      - name: Clean up credentials
+        if: always()
+        run: rm -f /tmp/firebase-sa.json
