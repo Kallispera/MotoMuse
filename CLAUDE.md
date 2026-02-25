@@ -3,21 +3,25 @@
 ## Project Overview
 MotoMuse is an AI-native motorcycle navigation app. Refer to `Design-overview.md` for the full system design.
 
-## Design Document Maintenance
-Whenever a decision is made during implementation that affects any of the following, update `Design-overview.md` to reflect it **before ending the session**:
+## Design & Architecture Document Maintenance
+Whenever a decision is made during implementation that affects any of the following, update `Design-overview.md` **and** `ARCHITECTURE.md` to reflect it **before ending the session**:
 
 - Technology choices (packages, services, APIs, frameworks)
 - Architecture or data flow changes
 - Changes to the phased implementation plan or success criteria
 - New constraints or quality rules discovered during building
-- Any decision that overrides or refines something already written in the document
+- Any decision that overrides or refines something already written in either document
+- Infrastructure changes: new secrets, deployment command changes, new GCP services, new Firestore collections
 
-Do **not** update the document for:
+`Design-overview.md` covers the **what and why** — features, data flows, success criteria, phased plan.
+`ARCHITECTURE.md` covers the **how and where** — project structure, GCP config, secrets, deployment commands, service URLs.
+
+Do **not** update these documents for:
 - Routine bug fixes that don't change the design
 - Minor UI tweaks
 - Test additions or refactoring that preserves existing behaviour
 
-When updating, edit the relevant section in place. Do not append a changelog. The document should always read as a clean, current design — not a history of changes.
+When updating, edit the relevant section in place. Do not append a changelog. Each document should always read as a clean, current reference — not a history of changes.
 
 ## Git & Version Control
 After completing any meaningful unit of work (a feature, a phase step, a significant fix), do the following **before ending the session**:
