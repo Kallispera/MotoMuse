@@ -220,7 +220,7 @@ Important: Only include REAL establishments that actually exist. Use accurate co
     logger.info("Generating descriptions with Claude Sonnet...")
     response = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=4096,
+        max_tokens=8192,
         messages=[{"role": "user", "content": prompt}],
     )
 
