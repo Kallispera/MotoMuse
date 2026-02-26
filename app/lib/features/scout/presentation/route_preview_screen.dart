@@ -1,27 +1,43 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:motomuse/core/theme/app_colors.dart';
+import 'package:motomuse/features/scout/application/scout_providers.dart';
 import 'package:motomuse/features/scout/domain/generated_route.dart';
+import 'package:motomuse/features/scout/domain/route_preferences.dart';
+import 'package:motomuse/features/scout/domain/saved_route.dart';
 
 /// Displays a generated motorcycle route on a map with narrative and imagery.
 ///
 /// Supports both single-leg (day out) and two-leg (breakfast run /
 /// overnighter) routes. Two-leg routes show outbound and return polylines
 /// in different colors.
-class RoutePreviewScreen extends StatefulWidget {
+class RoutePreviewScreen extends ConsumerStatefulWidget {
   /// Creates the route preview screen.
-  const RoutePreviewScreen({required this.route, super.key});
+  const RoutePreviewScreen({
+    required this.route,
+    this.preferences,
+    this.savedRouteId,
+    super.key,
+  });
 
   /// The generated route to display.
   final GeneratedRoute route;
 
+  /// The preferences used to generate this route. Required for saving.
+  final RoutePreferences? preferences;
+
+  /// Non-null when viewing an already-saved route (hides the save button).
+  final String? savedRouteId;
+
   @override
-  State<RoutePreviewScreen> createState() => _RoutePreviewScreenState();
+  ConsumerState<RoutePreviewScreen> createState() =>
+      _RoutePreviewScreenState();
 }
 
-class _RoutePreviewScreenState extends State<RoutePreviewScreen> {
+class _RoutePreviewScreenState extends ConsumerState<RoutePreviewScreen> {
   GoogleMapController? _mapController;
 
   @override
@@ -55,8 +71,27 @@ class _RoutePreviewScreenState extends State<RoutePreviewScreen> {
 
     final title = _routeTitle;
 
+    final canSave =
+        widget.preferences != null && widget.savedRouteId == null;
+
     return Scaffold(
-      appBar: AppBar(title: Text(title)),
+      appBar: AppBar(
+        title: Text(title),
+        actions: [
+          if (canSave)
+            IconButton(
+              icon: const Icon(Icons.bookmark_add_outlined),
+              tooltip: 'Save route',
+              onPressed: () => _showSaveDialog(context),
+            ),
+          if (widget.savedRouteId != null)
+            const IconButton(
+              icon: Icon(Icons.bookmark),
+              tooltip: 'Already saved',
+              onPressed: null,
+            ),
+        ],
+      ),
       body: Column(
         children: [
           // -- Map ----------------------------------------------------------
@@ -257,6 +292,51 @@ class _RoutePreviewScreenState extends State<RoutePreviewScreen> {
       default:
         return name;
     }
+  }
+
+  Future<void> _showSaveDialog(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final nameController = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Save route'),
+        content: TextField(
+          controller: nameController,
+          decoration: const InputDecoration(
+            hintText: 'Give this route a name',
+            border: OutlineInputBorder(),
+          ),
+          autofocus: true,
+          textCapitalization: TextCapitalization.sentences,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(ctx).pop(nameController.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    nameController.dispose();
+    if (name == null || name.isEmpty) return;
+
+    final savedRoute = SavedRoute(
+      id: '',
+      name: name,
+      route: widget.route,
+      preferences: widget.preferences!,
+      savedAt: DateTime.now(),
+    );
+    await ref.read(saveRouteNotifierProvider.notifier).save(savedRoute);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Route saved!')),
+    );
   }
 
   // ---------------------------------------------------------------------------

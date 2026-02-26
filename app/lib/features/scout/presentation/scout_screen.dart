@@ -148,7 +148,13 @@ class _ScoutScreenState extends ConsumerState<ScoutScreen> {
           data: (route) {
             if (route == null) return;
             ref.read(routeGenerationNotifierProvider.notifier).reset();
-            context.push(AppRoutes.routePreview, extra: route);
+            context.push(
+              AppRoutes.routePreview,
+              extra: <String, dynamic>{
+                'route': route,
+                'preferences': ref.read(routePreferencesProvider),
+              },
+            );
           },
           error: (e, _) {
             final msg = e is RouteException
@@ -165,7 +171,16 @@ class _ScoutScreenState extends ConsumerState<ScoutScreen> {
     if (isGenerating) return const _GeneratingState();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Scout')),
+      appBar: AppBar(
+        title: const Text('Scout'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.bookmark_outline),
+            tooltip: 'Saved routes',
+            onPressed: () => context.push(AppRoutes.savedRoutes),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),

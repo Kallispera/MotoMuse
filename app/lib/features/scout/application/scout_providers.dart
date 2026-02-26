@@ -1,11 +1,16 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:motomuse/features/auth/application/auth_providers.dart';
 import 'package:motomuse/features/garage/application/garage_providers.dart';
 import 'package:motomuse/features/onboarding/application/onboarding_providers.dart';
 import 'package:motomuse/features/scout/data/cloud_run_route_service.dart';
+import 'package:motomuse/features/scout/data/firestore_saved_route_repository.dart';
 import 'package:motomuse/features/scout/domain/generated_route.dart';
+import 'package:motomuse/features/scout/domain/route_exception.dart';
 import 'package:motomuse/features/scout/domain/route_preferences.dart';
+import 'package:motomuse/features/scout/domain/saved_route.dart';
+import 'package:motomuse/features/scout/domain/saved_route_repository.dart';
 
 // ---------------------------------------------------------------------------
 // Service provider
@@ -75,4 +80,92 @@ class RouteGenerationNotifier
 final routeGenerationNotifierProvider = AutoDisposeAsyncNotifierProvider<
     RouteGenerationNotifier, GeneratedRoute?>(
   RouteGenerationNotifier.new,
+);
+
+// ---------------------------------------------------------------------------
+// Saved routes — repository + stream + notifiers
+// ---------------------------------------------------------------------------
+
+/// Provides the [SavedRouteRepository] used to persist saved routes.
+final savedRouteRepositoryProvider = Provider<SavedRouteRepository>((ref) {
+  return FirestoreSavedRouteRepository(
+    firestore: ref.watch(firestoreProvider),
+  );
+});
+
+/// Emits the current list of saved routes for the signed-in user, updating
+/// in real time. Emits an empty list while there is no signed-in user.
+final userSavedRoutesProvider = StreamProvider<List<SavedRoute>>((ref) {
+  final uid = ref.watch(authStateChangesProvider).valueOrNull?.uid;
+  if (uid == null) return const Stream.empty();
+  return ref.watch(savedRouteRepositoryProvider).watchSavedRoutes(uid);
+});
+
+/// Manages saving a generated route to Firestore.
+///
+/// State is `null` when idle.
+class SaveRouteNotifier extends AutoDisposeAsyncNotifier<void> {
+  @override
+  FutureOr<void> build() => null;
+
+  /// Persists [savedRoute] to Firestore for the signed-in user.
+  ///
+  /// Sets state to [AsyncLoading] while in progress. On success, state
+  /// becomes `AsyncData(null)`. On failure, state becomes [AsyncError].
+  Future<void> save(SavedRoute savedRoute) async {
+    final uid = ref.read(authStateChangesProvider).valueOrNull?.uid;
+    if (uid == null) {
+      state = AsyncError(
+        const RouteException('Not signed in.'),
+        StackTrace.current,
+      );
+      return;
+    }
+    state = const AsyncLoading();
+    state = await AsyncValue.guard<void>(
+      () => ref.read(savedRouteRepositoryProvider).addSavedRoute(
+            uid,
+            savedRoute,
+          ),
+    );
+  }
+}
+
+/// Provider for [SaveRouteNotifier].
+final saveRouteNotifierProvider =
+    AutoDisposeAsyncNotifierProvider<SaveRouteNotifier, void>(
+  SaveRouteNotifier.new,
+);
+
+/// Manages deleting a saved route from Firestore.
+///
+/// State is `null` when idle.
+class DeleteSavedRouteNotifier extends AutoDisposeAsyncNotifier<void> {
+  @override
+  FutureOr<void> build() => null;
+
+  /// Deletes the saved route identified by [routeId].
+  Future<void> delete(String routeId) async {
+    final uid = ref.read(authStateChangesProvider).valueOrNull?.uid;
+    if (uid == null) {
+      state = AsyncError(
+        const RouteException('Not signed in.'),
+        StackTrace.current,
+      );
+      return;
+    }
+    state = const AsyncLoading();
+    state = await AsyncValue.guard<void>(
+      () => ref.read(savedRouteRepositoryProvider).deleteSavedRoute(
+            uid,
+            routeId,
+          ),
+    );
+  }
+}
+
+/// Provider for [DeleteSavedRouteNotifier].
+final deleteSavedRouteNotifierProvider =
+    AutoDisposeAsyncNotifierProvider<DeleteSavedRouteNotifier, void>(
+  DeleteSavedRouteNotifier.new,
 );

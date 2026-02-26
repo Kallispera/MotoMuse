@@ -158,6 +158,7 @@ Same pipeline runs twice:
 ### User data
 - `users/{uid}` — user profile (country, homeAddress, homeLocation GeoPoint, hasCompletedOnboarding bool, garagePersonality string, garagePersonalityBikeCount int, homeAffirmingMessage string, defaultCurviness int, defaultSceneryType string, defaultDistanceKm int)
 - `users/{uid}/bikes/{bikeId}` — bike records (make, model, year, mods, photo URL, personalityLine, affirmingMessage)
+- `users/{uid}/savedRoutes/{routeId}` — saved routes (name, savedAt timestamp, nested route data: polyline, distance, duration, narrative, streetViewUrls, waypoints, return-leg fields; nested preferences: startLocation, distanceKm, curviness, sceneryType, loop, routeType, destination/area fields)
 
 ### Curated riding content (seeded via `backend/seed_data.py`)
 - `riding_locations/{id}` — riding regions (name, description, center/bounds GeoPoints, polygon_points GeoPoint array, tags, scenery type, photo URLs, country, order)

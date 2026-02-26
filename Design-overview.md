@@ -211,10 +211,11 @@ Phase 3: The Route Architect (✅ Core route generation complete)
   - Backend deployed to Cloud Run; GOOGLE_MAPS_API_KEY added to Secret Manager alongside OPENAI_API_KEY ✅
   - 142 Flutter tests pass; 0 flutter analyze errors ✅
 
-  Phase 3b — Deferred to later iteration:
-  - Turn-by-turn navigation subsystem (google_maps_flutter + flutter_tts)
-  - Offline pre-caching of route data before ride start
-  - User route rating and feedback storage in Firestore
+  Phase 3b — Partially complete:
+  - Save generated routes to Firestore (`users/{uid}/savedRoutes/{routeId}`) for later viewing — bookmark icon on route preview, saved routes list accessible from Scout screen app bar ✅
+  - Turn-by-turn navigation subsystem (google_maps_flutter + flutter_tts) — deferred
+  - Offline pre-caching of route data before ride start — deferred
+  - User route rating and feedback storage in Firestore — deferred
 
   - Success: User configures a ride on the Scout screen, receives a high-quality route displayed on a map with Street View imagery and a narrative description ✅
 

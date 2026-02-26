@@ -18,7 +18,9 @@ import 'package:motomuse/features/garage/presentation/garage_screen.dart';
 import 'package:motomuse/features/onboarding/presentation/home_address_screen.dart';
 import 'package:motomuse/features/profile/presentation/profile_screen.dart';
 import 'package:motomuse/features/scout/domain/generated_route.dart';
+import 'package:motomuse/features/scout/domain/route_preferences.dart';
 import 'package:motomuse/features/scout/presentation/route_preview_screen.dart';
+import 'package:motomuse/features/scout/presentation/saved_routes_screen.dart';
 import 'package:motomuse/features/scout/presentation/scout_screen.dart';
 import 'package:motomuse/shared/widgets/app_shell.dart';
 
@@ -63,6 +65,9 @@ abstract final class AppRoutes {
 
   /// Route preview path — pass a [GeneratedRoute] via GoRouter `extra`.
   static const String routePreview = '/scout/preview';
+
+  /// Saved routes list path.
+  static const String savedRoutes = '/scout/saved';
 }
 
 // ---------------------------------------------------------------------------
@@ -131,9 +136,27 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: AppRoutes.routePreview,
         builder: (context, state) {
           final extra = state.extra;
-          if (extra is! GeneratedRoute) return const ScoutScreen();
-          return RoutePreviewScreen(route: extra);
+          // Support both a plain GeneratedRoute (legacy) and a map with
+          // route + preferences + optional savedRouteId.
+          if (extra is GeneratedRoute) {
+            return RoutePreviewScreen(route: extra);
+          }
+          if (extra is Map<String, dynamic>) {
+            final route = extra['route'] as GeneratedRoute?;
+            if (route != null) {
+              return RoutePreviewScreen(
+                route: route,
+                preferences: extra['preferences'] as RoutePreferences?,
+                savedRouteId: extra['savedRouteId'] as String?,
+              );
+            }
+          }
+          return const ScoutScreen();
         },
+      ),
+      GoRoute(
+        path: AppRoutes.savedRoutes,
+        builder: (context, state) => const SavedRoutesScreen(),
       ),
       // Explore detail routes (full screen, no bottom nav).
       GoRoute(
